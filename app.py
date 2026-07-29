@@ -9,6 +9,11 @@ import pandas as pd
 import io
 from excel_okuma import excel_oku, donemlere_ayir, VeriDogrulamaHatasi
 from pipeline import run_pipeline
+from yorumlama import (
+    dea_aksiyon_tablosu, dea_aksiyon_metni,
+    malmquist_yorum_metni,
+    panel_aksiyon_analizi, panel_aksiyon_metni,
+)
 
 
 def reg_params_table(res):
@@ -134,6 +139,21 @@ if "sonuc" in st.session_state:
             st.write("*BCC lambda (satir=peer, sutun=degerlendirilen DMU)*")
             st.dataframe(dea_d["lambda_bcc"].round(4), width='stretch')
 
+        st.write("---")
+        st.markdown("### 🔧 Aksiyon Önerileri (bu dönem için)")
+        st.caption("Etkin olmayan birimler için, aynı çıktı/girdi dengesini koruyarak somut olarak ne kadar "
+                   "girdi azaltılabileceğini ya da çıktı artırılabileceğini gösterir (CCR, girdi-yönelimli).")
+        X_all, Y_all = donemlere_ayir(sonuc["veri"])
+        girdi_cols = sonuc["veri"]["girdi_cols"]
+        cikti_cols = sonuc["veri"]["cikti_cols"]
+        dea_tablo = dea_aksiyon_tablosu(dea_d, X_all[donem_sec], Y_all[donem_sec])
+
+        secili_dmu = st.selectbox("Birim (DMU) seç", options=dea_tablo.index, key="dea_aksiyon_dmu")
+        st.markdown(dea_aksiyon_metni(dea_tablo.loc[secili_dmu], girdi_cols, cikti_cols))
+
+        with st.expander("Tüm birimler için aksiyon tablosu"):
+            st.dataframe(dea_tablo, width='stretch')
+
         dea_csv_buf = io.StringIO()
         pd.concat({
             "theta_ccr": dea_d["theta_ccr"], "theta_bcc": dea_d["theta_bcc"],
@@ -145,6 +165,15 @@ if "sonuc" in st.session_state:
     with tab_malmquist:
         st.write("**EC / TC / M degerleri (ardisik donem gecisleri)**")
         st.dataframe(sonuc["malmquist"].round(4), width='stretch')
+
+        st.write("---")
+        st.markdown("### 📈 Yorum")
+        malmquist_df = sonuc["malmquist"]
+        secim = st.selectbox(
+            "Birim / dönem geçişi seç", options=list(malmquist_df.index),
+            format_func=lambda x: f"{x[0]}  ({x[1]} → sonraki dönem)", key="malmquist_yorum_sec",
+        )
+        st.markdown(malmquist_yorum_metni(malmquist_df.loc[secim]))
 
         csv_buf = io.StringIO()
         sonuc["malmquist"].to_csv(csv_buf)
@@ -208,6 +237,20 @@ if "sonuc" in st.session_state:
         if oneri["sonuc_tablo"] != "pooled":
             st.dataframe(reg_meta_table(nihai_res), width='stretch', hide_index=True)
         st.dataframe(reg_params_table(nihai_res), width='stretch')
+        st.write("---")
+
+        st.markdown("### 🎯 Aksiyon Önerileri (DEA mantık kontrolü ile)")
+        st.caption("Nihai modelin anlamlı (p<0.05) katsayılarını, her değişkenin bir dönemlik ortalama "
+                   "%10'luk değişiminin MI üzerindeki etkisine çevirir. Girdi değişkenleri için negatif, "
+                   "çıktı değişkenleri için pozitif ilişki beklenir (DEA mantığı) — bu beklentiyle çelişen "
+                   "anlamlı ilişkiler ayrıca işaretlenir.")
+        analiz_df = panel_aksiyon_analizi(
+            nihai_res, sonuc["veri"]["girdi_cols"], sonuc["veri"]["cikti_cols"], sonuc["panel_df"]
+        )
+        st.markdown(panel_aksiyon_metni(analiz_df))
+        with st.expander("Detaylı katsayı / tutarlılık tablosu"):
+            st.dataframe(analiz_df, width='stretch')
+
         st.write("---")
 
         st.write("**Alternatif SE tipleriyle karsilastirma (bilgi amacli):**")
