@@ -9,11 +9,7 @@ import pandas as pd
 import io
 from excel_okuma import excel_oku, donemlere_ayir, VeriDogrulamaHatasi
 from pipeline import run_pipeline
-from yorumlama import (
-    dea_aksiyon_tablosu, dea_aksiyon_metni,
-    malmquist_yorum_metni,
-    panel_aksiyon_analizi, panel_aksiyon_metni,
-)
+from yorumlama import malmquist_yorum_metni
 
 
 def reg_params_table(res):
@@ -139,21 +135,6 @@ if "sonuc" in st.session_state:
             st.write("*BCC lambda (satir=peer, sutun=degerlendirilen DMU)*")
             st.dataframe(dea_d["lambda_bcc"].round(4), width='stretch')
 
-        st.write("---")
-        st.markdown("### 🔧 Aksiyon Önerileri (bu dönem için)")
-        st.caption("Etkin olmayan birimler için, aynı çıktı/girdi dengesini koruyarak somut olarak ne kadar "
-                   "girdi azaltılabileceğini ya da çıktı artırılabileceğini gösterir (CCR, girdi-yönelimli).")
-        X_all, Y_all = donemlere_ayir(sonuc["veri"])
-        girdi_cols = sonuc["veri"]["girdi_cols"]
-        cikti_cols = sonuc["veri"]["cikti_cols"]
-        dea_tablo = dea_aksiyon_tablosu(dea_d, X_all[donem_sec], Y_all[donem_sec])
-
-        secili_dmu = st.selectbox("Birim (DMU) seç", options=dea_tablo.index, key="dea_aksiyon_dmu")
-        st.markdown(dea_aksiyon_metni(dea_tablo.loc[secili_dmu], girdi_cols, cikti_cols))
-
-        with st.expander("Tüm birimler için aksiyon tablosu"):
-            st.dataframe(dea_tablo, width='stretch')
-
         dea_csv_buf = io.StringIO()
         pd.concat({
             "theta_ccr": dea_d["theta_ccr"], "theta_bcc": dea_d["theta_bcc"],
@@ -187,8 +168,13 @@ if "sonuc" in st.session_state:
         st.write("**VIF**")
         st.dataframe(p["vif"].round(3))
 
-        st.write(f"**Poolability F-testi:** stat={p['poolability'].get('stat', 'NA'):.4f}, "
+        st.write(f"**Poolability F-testi (Pooled vs FE):** stat={p['poolability'].get('stat', 'NA'):.4f}, "
                  f"p={p['poolability'].get('pval', 'NA'):.4f} -> {p['poolability'].get('sonuc','')}")
+        if "pval" in p.get("bp_lm", {}):
+            st.write(f"**Breusch-Pagan LM testi (Pooled vs RE):** stat={p['bp_lm']['stat']:.4f}, "
+                     f"p={p['bp_lm']['pval']:.4f} (N={p['bp_lm']['N']}, T={p['bp_lm']['T']})")
+        else:
+            st.write(f"**Breusch-Pagan LM testi:** hesaplanamadi ({p.get('bp_lm', {}).get('hata', 'bilinmeyen hata')})")
         st.write(f"**Hausman testi:** chi2={p['hausman']['stat']:.4f}, dof={p['hausman']['dof']}, "
                  f"p={p['hausman']['pval']:.4f}")
         st.write(f"**Secilen model:** {p['secilen_model']}")
@@ -224,7 +210,8 @@ if "sonuc" in st.session_state:
         st.dataframe(reg_params_table(p["re"]), width='stretch')
 
         tablo_map = {
-            "pooled": ("Pooled OLS", p["pooled"]),
+            "pooled_robust": ("Pooled OLS - Robust Standart Hatalar", p["pooled_robust"]),
+            "pooled_clustered": ("Pooled OLS - Clustered Standart Hatalar", p["pooled_clustered"]),
             "fe_robust": ("FE - Robust Standart Hatalar", p["fe_robust"]),
             "fe_clustered": ("FE - Clustered Standart Hatalar", p["fe_clustered"]),
             "re_robust": ("RE - Robust Standart Hatalar", p["re_robust"]),
@@ -234,23 +221,8 @@ if "sonuc" in st.session_state:
 
         st.write("---")
         st.markdown(f"### ⭐ NIHAI SONUC: {nihai_baslik}")
-        if oneri["sonuc_tablo"] != "pooled":
-            st.dataframe(reg_meta_table(nihai_res), width='stretch', hide_index=True)
+        st.dataframe(reg_meta_table(nihai_res), width='stretch', hide_index=True)
         st.dataframe(reg_params_table(nihai_res), width='stretch')
-        st.write("---")
-
-        st.markdown("### 🎯 Aksiyon Önerileri (DEA mantık kontrolü ile)")
-        st.caption("Nihai modelin anlamlı (p<0.05) katsayılarını, her değişkenin bir dönemlik ortalama "
-                   "%10'luk değişiminin MI üzerindeki etkisine çevirir. Girdi değişkenleri için negatif, "
-                   "çıktı değişkenleri için pozitif ilişki beklenir (DEA mantığı) — bu beklentiyle çelişen "
-                   "anlamlı ilişkiler ayrıca işaretlenir.")
-        analiz_df = panel_aksiyon_analizi(
-            nihai_res, sonuc["veri"]["girdi_cols"], sonuc["veri"]["cikti_cols"], sonuc["panel_df"]
-        )
-        st.markdown(panel_aksiyon_metni(analiz_df))
-        with st.expander("Detaylı katsayı / tutarlılık tablosu"):
-            st.dataframe(analiz_df, width='stretch')
-
         st.write("---")
 
         st.write("**Alternatif SE tipleriyle karsilastirma (bilgi amacli):**")
@@ -263,8 +235,18 @@ if "sonuc" in st.session_state:
                 st.write(f"*{p['secilen_model']} - Clustered*")
                 st.dataframe(reg_params_table(p["clustered"]), width='stretch')
         else:
-            st.write(f"*(Bilgi amacli) {p['secilen_model']} modeli - Robust Standart Hatalar*")
+            st.write("*(Bilgi amacli, Hausman'in FE/RE arasindan sectigi model)* "
+                      f"{p['secilen_model']} - Robust Standart Hatalar*")
             st.dataframe(reg_params_table(p["robust"]), width='stretch')
+
+        st.write(f"*(Bilgi amacli) Pooled OLS - Robust vs Clustered*")
+        c_pr, c_pc = st.columns(2)
+        with c_pr:
+            st.write("*Pooled OLS - Robust*")
+            st.dataframe(reg_params_table(p["pooled_robust"]), width='stretch')
+        with c_pc:
+            st.write("*Pooled OLS - Clustered*")
+            st.dataframe(reg_params_table(p["pooled_clustered"]), width='stretch')
 
         st.write("**Model Karsilastirma (Pooled OLS vs FE vs RE)**")
         katsayi_tablo, tstat_tablo, ozet_tablo = comparison_tables(p["comparison"])
