@@ -394,7 +394,7 @@ if "sonuc" in st.session_state:
            ekstrapolasyonla (damping) uygulanir ve bir kisit notu eklenir.
         4. **Sinir kontrolleri:** projeksiyon, DMU'nun kendi tarihsel araligina gore
            makul bir bant disina cikamaz; negatif deger asla uretilmez.
-        5. **Duyarlilik taramasi:** Temkinli (0.5x) / Baz (1.0x) / Iyimser (1.5x) olcekte
+        5. **Duyarlilik taramasi:** Hedefli degiskenler icin %5 / %10 (Baz) / %15
            uc senaryo birlikte uretilir; Baz senaryo nihai sonuc olarak one cikarilir.
         """)
 
@@ -429,7 +429,7 @@ if "sonuc" in st.session_state:
             karsilastirma_satirlar = []
             for isim, s in gelecek["senaryolar"].items():
                 karsilastirma_satirlar.append({
-                    "Senaryo": isim, "Olcek": s["olcek"],
+                    "Senaryo": isim, "Yuzde": f"%{s['yuzde']*100:g}",
                     "Ortalama EC": round(s["malmquist"]["EC"].mean(), 4),
                     "Ortalama TC": round(s["malmquist"]["TC"].mean(), 4),
                     "Ortalama M": round(s["malmquist"]["M"].mean(), 4),
@@ -445,7 +445,7 @@ if "sonuc" in st.session_state:
             )
             s = gelecek["senaryolar"][senaryo_sec]
 
-            st.markdown(f"#### Senaryo Detayi: {senaryo_sec} (olcek={s['olcek']:g})")
+            st.markdown(f"#### Senaryo Detayi: {senaryo_sec} (hedefli degisim yuzdesi=%{s['yuzde']*100:g})")
             dmu_sec_gelecek = st.selectbox(
                 "DMU sec (senaryo detay tablosu icin)", options=sonuc["veri"]["dmu_sirali"],
                 key="gelecek_dmu_sec",
