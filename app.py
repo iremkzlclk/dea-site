@@ -11,6 +11,7 @@ from excel_okuma import excel_oku, donemlere_ayir, VeriDogrulamaHatasi
 from dea_module import min_dmu_kontrolu
 from pipeline import run_pipeline
 from senaryo_module import gelecek_donem_analizi
+from backtest_module import backtest_calistir
 from yorumlama import (
     malmquist_yorum_metni,
     malmquist_donem_ortalamasi,
@@ -148,8 +149,9 @@ if "sonuc" in st.session_state:
     girdi_cols = sonuc["veri"]["girdi_cols"]
     cikti_cols = sonuc["veri"]["cikti_cols"]
 
-    tab_dea, tab_malmquist, tab_panel, tab_gelecek = st.tabs(
-        ["DEA Sonuclari", "Malmquist Sonuclari", "Panel Analizi", "Gelecek Verimlilik Tahmini"]
+    tab_dea, tab_malmquist, tab_panel, tab_gelecek, tab_backtest = st.tabs(
+        ["DEA Sonuclari", "Malmquist Sonuclari", "Panel Analizi", "Gelecek Verimlilik Tahmini",
+         "Backtest (Model Dogrulama)"]
     )
 
     with tab_dea:
@@ -491,4 +493,98 @@ if "sonuc" in st.session_state:
                 f"{senaryo_sec} senaryo detay tablosunu CSV indir", gelecek_csv_buf.getvalue(),
                 file_name=f"gelecek_senaryo_{senaryo_sec.lower()}.csv", key="gelecek_csv_dl",
             )
+
+    with tab_backtest:
+        st.markdown("### 🎯 Backtest — Panel Modelinin Gercek Tahmin Gucu")
+        st.markdown("""
+        Bu bolum, **"Gelecek Verimlilik Tahmini"** sekmesindeki senaryo mekanizmasindan
+        BAGIMSIZ bir dogrulamadir. DEA'yi tekrar cozmez; sadece panel modelinin kendi
+        basina ne kadar isabetli oldugunu, gecmiste zaten bildiginiz bir donem uzerinde
+        test eder ("leave-last-period-out"):
+
+        1. Panel modeli, **son gecis donemi HARIC** butun gecmis donemlerle yeniden kurulur
+           (ayni Pooled/FE/RE + Hausman + robust/clustered karar zinciri uygulanir).
+        2. Bu egitilen modelin katsayilariyla, son gecisin **gercek** (varsayimsal degil)
+           girdi/cikti degerleri kullanilarak MI tahmin edilir.
+        3. Tahmin, o gecisin **gercekten gerceklesen** MI degeriyle karsilastirilir.
+        4. Sonuc, "MI hep aynen kalir" varsayimina dayanan naif bir tahminle de kiyaslanir
+           -- modeliniz bu naif tahminden daha iyi mi, sorusuna somut bir cevap verir.
+
+        ⚠️ En az 3 ham veri donemi (yani en az 2 gecis donemi) gerektirir.
+        """)
+
+        if st.button("Backtest Calistir", type="primary", key="backtest_calistir_btn"):
+            with st.spinner("Panel modeli son donem haric egitiliyor ve dogrulama yapiliyor..."):
+                bagimsizlar_bt = [v for v in p["pooled"].params.index if v != "const"]
+                st.session_state["backtest"] = backtest_calistir(sonuc["panel_df"], bagimsizlar_bt)
+
+        if "backtest" in st.session_state:
+            bt = st.session_state["backtest"]
+
+            if not bt["yeterli_veri"]:
+                st.error(bt["mesaj"])
+            else:
+                st.write("---")
+                st.caption(
+                    f"Egitim donemleri (gecis indeksi): **{bt['egitim_zamanlari']}** — "
+                    f"Test (holdout) donemi: **{bt['holdout_zaman']}** — "
+                    f"Egitimde secilen model: **{bt['nihai_baslik']}**"
+                )
+
+                m = bt["metrikler"]
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("MAE", m["MAE"])
+                c2.metric("RMSE", m["RMSE"])
+                c3.metric("MAPE (%)", m["MAPE_%"])
+                c4.metric("Yon Dogruluk (%)", m["yon_dogruluk_%"])
+
+                if m["Pearson_r"] is not None:
+                    st.write(f"**Pearson korelasyonu (gercek vs tahmin):** {m['Pearson_r']}")
+
+                if m["modelin_naiften_iyi_mi"]:
+                    st.success(
+                        f"✅ Modelinizin ortalama hatasi (MAE={m['MAE']}), \"MI hic degismez\" varsayan "
+                        f"naif tahminin hatasindan (MAE={m['naif_baseline_MAE']}) **daha dusuk**. "
+                        f"Panel modeliniz naif tahminden daha iyi performans gosteriyor."
+                    )
+                else:
+                    st.warning(
+                        f"⚠️ Modelinizin ortalama hatasi (MAE={m['MAE']}), \"MI hic degismez\" varsayan "
+                        f"naif tahminin hatasindan (MAE={m['naif_baseline_MAE']}) **daha yuksek veya esit**. "
+                        f"Bu, panel modelinizin bu veri setinde ek bir tahmin gucu katmadigini gosteriyor -- "
+                        f"sonuclari (ozellikle Gelecek Verimlilik Tahmini sekmesindekileri) yorumlarken "
+                        f"temkinli olun."
+                    )
+
+                if m["yon_dogruluk_%"] < 60:
+                    st.warning(
+                        f"⚠️ Yon dogruluk orani (%{m['yon_dogruluk_%']}) yazi-tura (%50) seviyesine yakin -- "
+                        f"model, verimliligin artacagini mi azalacagini mi dogru tahmin etmekte de "
+                        f"zorlaniyor olabilir."
+                    )
+
+                st.write("---")
+                st.markdown("#### DMU Bazinda Gercek vs Tahmin")
+
+                def _yon_renklendir(row):
+                    renk = "background-color: #d4f7d4" if row["yon_dogru_mu"] else "background-color: #f7d4d4"
+                    return [renk] * len(row)
+
+                st.dataframe(
+                    bt["tahmin_df"].reset_index().style.apply(_yon_renklendir, axis=1),
+                    width='stretch', hide_index=True,
+                )
+
+                st.caption(
+                    "Yesil satirlar: modelin verimlilik ARTIS/AZALIS yonunu dogru tahmin ettigi DMU'lar. "
+                    "Kirmizi satirlar: yonun yanlis tahmin edildigi DMU'lar."
+                )
+
+                backtest_csv_buf = io.StringIO()
+                bt["tahmin_df"].to_csv(backtest_csv_buf)
+                st.download_button(
+                    "Backtest sonuclarini CSV indir", backtest_csv_buf.getvalue(),
+                    file_name="backtest_sonuclari.csv", key="backtest_csv_dl",
+                )
+
 

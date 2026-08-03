@@ -130,7 +130,7 @@ def malmquist_donem_ortalamasi(malmquist_df: pd.DataFrame, donem_sirasi=None) ->
 # ------------------------------------------------------------------
 # 3) PANEL YORUMLAMA (en onemli katman)
 # ------------------------------------------------------------------
-def panel_aksiyon_analizi(nihai_res, girdi_cols, cikti_cols, panel_df: pd.DataFrame, alpha=0.05):
+def panel_aksiyon_analizi(nihai_res, girdi_cols, cikti_cols, panel_df: pd.DataFrame, alpha=0.10):
     """
     Secilen nihai modelin (Pooled OLS / FE / RE, robust ya da clustered) anlamli
     katsayilarini alip, DEA girdi/cikti mantigiyla CAPRAZ KONTROL ederek
@@ -184,7 +184,7 @@ def panel_aksiyon_metni(analiz_df: pd.DataFrame) -> str:
     """Panel aksiyon tablosunu duz, karar-destek metnine cevirir."""
     anlamli = analiz_df[analiz_df["anlamli_mi"]]
     if anlamli.empty:
-        return ("Secilen modelde istatistiksel olarak anlamli (p<0.05) hicbir degisken bulunamadi. "
+        return ("Secilen modelde istatistiksel olarak anlamli (p<0.10) hicbir degisken bulunamadi. "
                 "Bu durumda mevcut veriyle net, sayisal bir aksiyon onerisi sunmak yanlis yonlendirici olur -- "
                 "ek veri/donem toplanmasi ya da farkli degisken secimi degerlendirilmelidir.")
 
