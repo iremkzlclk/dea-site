@@ -380,22 +380,25 @@ if "sonuc" in st.session_state:
     with tab_gelecek:
         st.markdown("### 🔮 Gelecek Dönem Verimlilik Tahmini")
         st.markdown("""
-        Bu bolum, panel analizindeki **nihai model** katsayilarini ve degiskenlerin
-        tarihsel seyrini birlikte kullanarak, **sadece son donemin verilerini** temel alan
-        bir "bir sonraki donem" senaryosu uretir. Izlenen yontem:
+        Bu bolum, panel analizindeki **nihai model** katsayilarini kullanarak, **sadece
+        son donemin verilerini** temel alan bir "bir sonraki donem" senaryosu uretir.
+        Izlenen yontem (**ceteris paribus** -- sadece kanit oldugu degiskenler degisir,
+        gerisi sabit tutulur):
 
-        1. **Ham veri → Medyan-delta trend (dogal seyir):** her DMU-degisken cifti icin
-           tarihsel donemler arasindaki ardisik farklarin medyani alinir.
-        2. **Panel-DEA tutarlilik kontrolu → Hedefli / Dogal ayrimi:** panelde ANLAMLI
+        1. **Panel-DEA tutarlilik kontrolu → Hedefli / Dogal ayrimi:** panelde ANLAMLI
            **ve** DEA teorisiyle (Girdi→negatif, Cikti→pozitif) TUTARLI degiskenler
-           "Hedefli" kabul edilip iyilesme yonunde deliberate itilir; digerleri "Dogal"
-           kalir ve sadece kendi trendini takip eder.
-        3. **VIF kontrolu:** VIF≥5 olan "Dogal" degiskenlerin tarihsel trendi sinirli
-           ekstrapolasyonla (damping) uygulanir ve bir kisit notu eklenir.
-        4. **Sinir kontrolleri:** projeksiyon, DMU'nun kendi tarihsel araligina gore
-           makul bir bant disina cikamaz; negatif deger asla uretilmez.
-        5. **Duyarlilik taramasi:** Hedefli degiskenler icin %5 / %10 (Baz) / %15
-           uc senaryo birlikte uretilir; Baz senaryo nihai sonuc olarak one cikarilir.
+           "Hedefli" kabul edilir -- SADECE bunlar deliberate olarak degistirilir.
+        2. **Hedefli degiskenler:** katsayinin isaretine gore (azalt/artir), son donem
+           degerinin %5 / %10 / %15'i kadar degistirilir; bu hareketin MI uzerindeki
+           tahmini etkisi de (katsayi x degisim) ayrica raporlanir.
+        3. **Digerleri (Dogal):** ceteris paribus -- son donem degeriyle AYNEN
+           birakilir, hicbir sekilde degistirilmez. VIF≥5 olanlar icin (hedefli
+           degiskenlerle yuksek korelasyon) sadece bilgi amacli bir uyari eklenir.
+        4. **Sinir kontrolleri:** Hedefli degiskenlerin projeksiyonu, DMU'nun kendi
+           tarihsel araligina gore makul bir bant disina cikamaz; negatif deger
+           asla uretilmez.
+        5. **Duyarlilik taramasi:** %5 / %10 (Baz) / %15 uc senaryo birlikte uretilir;
+           Baz senaryo nihai sonuc olarak one cikarilir.
         """)
 
         if st.button("Gelecek Donem Senaryosunu Hesapla", type="primary", key="gelecek_hesapla"):
