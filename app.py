@@ -10,6 +10,7 @@ import io
 from excel_okuma import excel_oku, donemlere_ayir, VeriDogrulamaHatasi
 from dea_module import min_dmu_kontrolu
 from pipeline import run_pipeline
+from senaryo_module import gelecek_donem_analizi
 from yorumlama import (
     malmquist_yorum_metni,
     malmquist_donem_ortalamasi,
@@ -147,7 +148,9 @@ if "sonuc" in st.session_state:
     girdi_cols = sonuc["veri"]["girdi_cols"]
     cikti_cols = sonuc["veri"]["cikti_cols"]
 
-    tab_dea, tab_malmquist, tab_panel = st.tabs(["DEA Sonuclari", "Malmquist Sonuclari", "Panel Analizi"])
+    tab_dea, tab_malmquist, tab_panel, tab_gelecek = st.tabs(
+        ["DEA Sonuclari", "Malmquist Sonuclari", "Panel Analizi", "Gelecek Verimlilik Tahmini"]
+    )
 
     with tab_dea:
         donem_sec = st.selectbox("Donem sec", options=sonuc["veri"]["donem_sirali"], key="dea_donem")
@@ -373,3 +376,116 @@ if "sonuc" in st.session_state:
         st.dataframe(tstat_tablo, width='stretch')
         st.write("*Model ozet istatistikleri*")
         st.dataframe(ozet_tablo, width='stretch')
+
+    with tab_gelecek:
+        st.markdown("### 🔮 Gelecek Dönem Verimlilik Tahmini")
+        st.markdown("""
+        Bu bolum, panel analizindeki **nihai model** katsayilarini ve degiskenlerin
+        tarihsel seyrini birlikte kullanarak, **sadece son donemin verilerini** temel alan
+        bir "bir sonraki donem" senaryosu uretir. Izlenen yontem:
+
+        1. **Ham veri → Medyan-delta trend (dogal seyir):** her DMU-degisken cifti icin
+           tarihsel donemler arasindaki ardisik farklarin medyani alinir.
+        2. **Panel-DEA tutarlilik kontrolu → Hedefli / Dogal ayrimi:** panelde ANLAMLI
+           **ve** DEA teorisiyle (Girdi→negatif, Cikti→pozitif) TUTARLI degiskenler
+           "Hedefli" kabul edilip iyilesme yonunde deliberate itilir; digerleri "Dogal"
+           kalir ve sadece kendi trendini takip eder.
+        3. **VIF kontrolu:** VIF≥5 olan "Dogal" degiskenlerin tarihsel trendi sinirli
+           ekstrapolasyonla (damping) uygulanir ve bir kisit notu eklenir.
+        4. **Sinir kontrolleri:** projeksiyon, DMU'nun kendi tarihsel araligina gore
+           makul bir bant disina cikamaz; negatif deger asla uretilmez.
+        5. **Duyarlilik taramasi:** Temkinli (0.5x) / Baz (1.0x) / Iyimser (1.5x) olcekte
+           uc senaryo birlikte uretilir; Baz senaryo nihai sonuc olarak one cikarilir.
+        """)
+
+        if st.button("Gelecek Donem Senaryosunu Hesapla", type="primary", key="gelecek_hesapla"):
+            with st.spinner("3 senaryo icin son donem verisi olusturuluyor, DEA ve Malmquist tekrar cozuluyor..."):
+                st.session_state["gelecek"] = gelecek_donem_analizi(sonuc)
+
+        if "gelecek" in st.session_state:
+            gelecek = st.session_state["gelecek"]
+
+            st.write("---")
+            st.markdown("#### 1-2) Hedefli / Dogal Siniflandirma")
+            st.caption(
+                f"Nihai model: **{gelecek['nihai_res_baslik']}**. Son gercek donem: **{gelecek['son_donem']}** "
+                f"(senaryo bu donemin verisini baz alir)."
+            )
+            st.dataframe(
+                gelecek["siniflandirma"].reset_index(),
+                width='stretch', hide_index=True,
+            )
+
+            hedefli_sayi = (gelecek["siniflandirma"]["siniflandirma"] == "Hedefli").sum()
+            if hedefli_sayi == 0:
+                st.info(
+                    "Bu modelde 'Hedefli' (anlamli + DEA teorisiyle tutarli) degisken bulunamadi -- "
+                    "tum degiskenler yalnizca kendi tarihsel trendini takip ediyor (Temkinli/Baz/Iyimser "
+                    "senaryolari bu nedenle birbirine yakin ya da ayni cikabilir)."
+                )
+
+            st.write("---")
+            st.markdown("#### 5) Senaryo Karsilastirma (Duyarlilik Taramasi)")
+            karsilastirma_satirlar = []
+            for isim, s in gelecek["senaryolar"].items():
+                karsilastirma_satirlar.append({
+                    "Senaryo": isim, "Olcek": s["olcek"],
+                    "Ortalama EC": round(s["malmquist"]["EC"].mean(), 4),
+                    "Ortalama TC": round(s["malmquist"]["TC"].mean(), 4),
+                    "Ortalama M": round(s["malmquist"]["M"].mean(), 4),
+                })
+            karsilastirma_df = pd.DataFrame(karsilastirma_satirlar).set_index("Senaryo")
+            st.dataframe(karsilastirma_df, width='stretch')
+            st.bar_chart(karsilastirma_df["Ortalama M"])
+
+            st.write("---")
+            senaryo_sec = st.selectbox(
+                "Detayli incelemek icin senaryo secin", options=list(gelecek["senaryolar"].keys()),
+                index=1, key="gelecek_senaryo_sec",  # varsayilan: Baz
+            )
+            s = gelecek["senaryolar"][senaryo_sec]
+
+            st.markdown(f"#### Senaryo Detayi: {senaryo_sec} (olcek={s['olcek']:g})")
+            dmu_sec_gelecek = st.selectbox(
+                "DMU sec (senaryo detay tablosu icin)", options=sonuc["veri"]["dmu_sirali"],
+                key="gelecek_dmu_sec",
+            )
+            st.dataframe(s["detay"].loc[dmu_sec_gelecek], width='stretch')
+
+            st.write("---")
+            st.markdown("#### Projeksiyon Donemi DEA Sonuclari")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.write("**CCR (theta)**")
+                st.dataframe(s["dea"]["theta_ccr"].round(4), width='stretch')
+            with c2:
+                st.write("**BCC (theta)**")
+                st.dataframe(s["dea"]["theta_bcc"].round(4), width='stretch')
+            st.write("**Olcek Etkinligi**")
+            st.dataframe(s["dea"]["olcek_etkinligi"].round(4), width='stretch')
+
+            st.write("---")
+            st.markdown(f"#### Malmquist: {gelecek['son_donem']} → Projeksiyon Donemi")
+            st.dataframe(s["malmquist"].round(4), width='stretch')
+
+            st.markdown("##### Yorum")
+            malmquist_yorum_sec = st.selectbox(
+                "Yorumlanacak DMU", options=list(s["malmquist"].index.get_level_values("DMU")),
+                key="gelecek_malmquist_yorum_dmu",
+            )
+            satir = s["malmquist"].xs(malmquist_yorum_sec, level="DMU").iloc[0]
+            st.markdown(malmquist_yorum_metni(satir))
+
+            st.caption(
+                "⚠️ Bu tahmin, gecmis trend ve panel model katsayilarina dayanan bir SENARYO'dur, "
+                "kesin bir ongoru degildir. Ozellikle DMU sayisi az oldugunda ve/veya panelde anlamli "
+                "'Hedefli' degisken bulunamadigi durumlarda temkinli yorumlanmalidir."
+            )
+
+            gelecek_csv_buf = io.StringIO()
+            s["detay"].to_csv(gelecek_csv_buf)
+            st.download_button(
+                f"{senaryo_sec} senaryo detay tablosunu CSV indir", gelecek_csv_buf.getvalue(),
+                file_name=f"gelecek_senaryo_{senaryo_sec.lower()}.csv", key="gelecek_csv_dl",
+            )
+
