@@ -9,6 +9,7 @@ import pandas as pd
 import io
 from excel_okuma import excel_oku, donemlere_ayir, VeriDogrulamaHatasi
 from dea_module import min_dmu_kontrolu
+from panel_module import leave_one_out_kararlilik
 from pipeline import run_pipeline
 from senaryo_module import gelecek_donem_analizi
 from backtest_module import backtest_calistir
@@ -345,6 +346,67 @@ if "sonuc" in st.session_state:
             st.bar_chart(anlamli_grafik)
 
         st.markdown(panel_aksiyon_metni(analiz_df))
+        st.write("---")
+
+        st.markdown("### 🔒 Katsayı Kararlılığı (Leave-One-DMU-Out)")
+        st.caption(
+            "Nihai modeldeki her degiskeni, panelden SIRAYLA BIR DMU cikararak yeniden tahmin eder. "
+            "Bir iliskinin genel bir orunek mi, yoksa tek bir DMU'nun surukledigi bir yapaylik mi "
+            "oldugunu anlamanin standart bir yolu budur: katsayinin ISARETI, hangi DMU cikarilirsa "
+            "cikarilsin ayni kaliyor mu diye bakilir. Isaret hicbir cikarmada degismiyorsa iliski "
+            "**Saglam**; bir DMU cikarilinca isaret degisiyorsa iliski o DMU'ya asiri bagimli, yani "
+            "**Kirilgan** olabilir."
+        )
+        if st.button("Kararlilik Testini Calistir", key="kararlilik_btn"):
+            with st.spinner("Panel modeli her DMU icin sirayla cikarilarak yeniden tahmin ediliyor..."):
+                st.session_state["kararlilik"] = leave_one_out_kararlilik(
+                    sonuc["panel_df"], "MI", girdi_cols + cikti_cols, oneri["sonuc_tablo"],
+                )
+
+        if "kararlilik" in st.session_state:
+            kr = st.session_state["kararlilik"]
+            if not kr["yeterli_veri"]:
+                st.error(kr["mesaj"])
+            else:
+                def _kararlilik_renklendir(row):
+                    if row["kararlilik"] == "Saglam":
+                        renk = "background-color: #d4f7d4"
+                    elif row["kararlilik"] == "Kirilgan":
+                        renk = "background-color: #f7d4d4"
+                    else:
+                        renk = "background-color: #fff3cd"
+                    return [renk] * len(row)
+
+                st.dataframe(
+                    kr["ozet_df"].reset_index().style.apply(_kararlilik_renklendir, axis=1),
+                    width='stretch', hide_index=True,
+                )
+                if kr["basarisiz_dmular"]:
+                    st.warning(f"Su DMU'lar cikarildiginda model kurulamadi (atlandi): {kr['basarisiz_dmular']}")
+
+                kirilgan_degiskenler = kr["ozet_df"][kr["ozet_df"]["kararlilik"] == "Kirilgan"]
+                if not kirilgan_degiskenler.empty:
+                    st.warning(
+                        f"⚠️ Su degiskenlerin katsayi isareti, en az bir DMU cikarilinca degisiyor: "
+                        f"**{', '.join(kirilgan_degiskenler.index)}**. Bu degiskenlere dayanan yorumlar "
+                        f"(ozellikle 'Gelecek Verimlilik Tahmini' sekmesindeki 'Hedefli' siniflandirmasi) "
+                        f"temkinli degerlendirilmelidir -- iliski tek bir DMU'nun etkisiyle surukleniyor olabilir."
+                    )
+                else:
+                    st.success(
+                        "✅ Butun degiskenlerin katsayi isareti, hicbir DMU tek basina cikarilinca "
+                        "degismiyor -- iliskiler bu acidan saglam gorunuyor."
+                    )
+
+                with st.expander("Detay: Her DMU cikarildiginda katsayilar"):
+                    st.dataframe(kr["detay_df"].reset_index(), width='stretch', hide_index=True)
+
+                kararlilik_csv_buf = io.StringIO()
+                kr["ozet_df"].to_csv(kararlilik_csv_buf)
+                st.download_button(
+                    "Kararlilik testi ozetini CSV indir", kararlilik_csv_buf.getvalue(),
+                    file_name="kararlilik_ozet.csv", key="kararlilik_csv_dl",
+                )
         st.write("---")
 
         st.write("**Alternatif SE tipleriyle karsilastirma (bilgi amacli):**")

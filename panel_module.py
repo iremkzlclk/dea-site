@@ -284,3 +284,111 @@ def run_panel_analysis(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list, 
         "oneri": oneri,
         "alpha": alpha,
     }
+
+
+def leave_one_out_kararlilik(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list,
+                              sonuc_tablo: str, alpha: float = 0.10) -> dict:
+    """
+    Leave-one-DMU-out katsayi kararlilik testi.
+
+    Nihai modeli (oneri["sonuc_tablo"] neyse ayni model tipi + SE tipiyle),
+    panelden SIRAYLA BIR DMU cikararak N kere yeniden tahmin eder. Bir
+    iliskinin tek bir DMU'nun surukledigi bir yapaylik mi, yoksa genel bir
+    orunek mi oldugunu anlamanin standart bir yolu: katsayinin ISARETI,
+    hangi DMU cikarilirsa cikarilsin ayni kaliyor mu diye bakmaktir.
+
+    sonuc_tablo: panel_sonuc["oneri"]["sonuc_tablo"] degeri, orn. "pooled_robust",
+                 "fe_clustered", "re_robust" -- hangi model+SE kombinasyonunun
+                 tekrar tekrar tahmin edilecegini belirler.
+    alpha: katsayi "hala anlamli mi" sayimi icin esik (varsayilan 0.10, app.py'deki
+           "Katsayilarin Verimlilige Etkisi" tablosuyla tutarli).
+
+    Returns: dict -- yeterli_veri, model_tipi, se_tipi, ozet_df (index=degisken:
+             tam_ornek_katsayi, min/max/std_katsayi, yon_tutarliligi_%,
+             anlamli_kalan_%, kararlilik: Saglam/Orta/Kirilgan),
+             detay_df (index=[degisken,cikarilan_dmu]: katsayi, p_degeri),
+             basarisiz_dmular (cikarilinca model kurulamayan DMU'lar)
+    """
+    model_tipi, se_tipi = sonuc_tablo.split("_", 1)
+    entities = list(panel_df.index.get_level_values("entity").unique())
+
+    if len(entities) < 4:
+        return {
+            "yeterli_veri": False,
+            "mesaj": f"Leave-one-out kararlilik testi icin en az 4 DMU gerekli (mevcut: {len(entities)}).",
+        }
+
+    def _fit(alt_df: pd.DataFrame):
+        y = alt_df[bagimli]
+        X = alt_df[bagimsizlar]
+        cluster_kw = {"cluster_entity": True} if se_tipi == "clustered" else {}
+        if model_tipi == "pooled":
+            Xc = add_constant(X)
+            return PooledOLS(y, Xc).fit(cov_type=se_tipi, **cluster_kw)
+        elif model_tipi == "fe":
+            return PanelOLS(y, X, entity_effects=True, drop_absorbed=True).fit(cov_type=se_tipi, **cluster_kw)
+        else:  # "re"
+            Xc = add_constant(X)
+            return RandomEffects(y, Xc).fit(cov_type=se_tipi, **cluster_kw)
+
+    tam_model = _fit(panel_df)
+    tam_katsayilar = tam_model.params.drop("const", errors="ignore")
+
+    kayitlar_by_deg = {deg: [] for deg in bagimsizlar}
+    basarisiz = []
+    for cikarilan in entities:
+        alt_df = panel_df[panel_df.index.get_level_values("entity") != cikarilan]
+        try:
+            res = _fit(alt_df)
+        except Exception:
+            basarisiz.append(cikarilan)
+            continue
+        for deg in bagimsizlar:
+            if deg in res.params.index:
+                kayitlar_by_deg[deg].append({
+                    "cikarilan_dmu": cikarilan,
+                    "katsayi": float(res.params[deg]),
+                    "p_degeri": float(res.pvalues[deg]),
+                })
+
+    ozet_satirlari = []
+    detay_satirlari = []
+    for deg in bagimsizlar:
+        kayitlar = kayitlar_by_deg[deg]
+        if not kayitlar or deg not in tam_katsayilar.index:
+            continue
+        tam_katsayi = float(tam_katsayilar[deg])
+        tam_yon = 1 if tam_katsayi > 0 else -1
+        katsayilar = [k["katsayi"] for k in kayitlar]
+        p_degerleri = [k["p_degeri"] for k in kayitlar]
+        ayni_yon_sayisi = sum(1 for k in katsayilar if (1 if k > 0 else -1) == tam_yon)
+        anlamli_kalan_sayisi = sum(1 for p in p_degerleri if p < alpha)
+        yon_tutarliligi = ayni_yon_sayisi / len(katsayilar) * 100
+
+        if ayni_yon_sayisi == len(katsayilar):
+            kararlilik = "Saglam"
+        elif yon_tutarliligi >= 80:
+            kararlilik = "Orta"
+        else:
+            kararlilik = "Kirilgan"
+
+        ozet_satirlari.append({
+            "degisken": deg, "tam_ornek_katsayi": round(tam_katsayi, 5),
+            "min_katsayi": round(min(katsayilar), 5), "max_katsayi": round(max(katsayilar), 5),
+            "std_katsayi": round(float(np.std(katsayilar)), 5),
+            "yon_tutarliligi_%": round(yon_tutarliligi, 1),
+            "anlamli_kalan_%": round(anlamli_kalan_sayisi / len(p_degerleri) * 100, 1),
+            "kararlilik": kararlilik,
+        })
+        for k in kayitlar:
+            detay_satirlari.append({"degisken": deg, **k})
+
+    ozet_df = pd.DataFrame(ozet_satirlari).set_index("degisken")
+    detay_df = pd.DataFrame(detay_satirlari).set_index(["degisken", "cikarilan_dmu"])
+
+    return {
+        "yeterli_veri": True,
+        "model_tipi": model_tipi, "se_tipi": se_tipi,
+        "ozet_df": ozet_df, "detay_df": detay_df,
+        "basarisiz_dmular": basarisiz,
+    }
