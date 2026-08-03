@@ -65,6 +65,26 @@ def _katsayi_renklendir(row):
     return [renk] * len(row)
 
 
+def excel_indirme_verisi(df_or_obj) -> bytes:
+    """
+    Bir DataFrame'i indirilebilir Excel (.xlsx) bytes'ina cevirir.
+
+    Onceden CSV kullaniliyordu, ama Turkce karakterler (ü, ı, ş, ç, ğ, ö) CSV'de
+    Excel tarafindan yanlis kodlamayla acilip bozuk gorunuyordu (orn. "Türbin" ->
+    "TÃ¼rbin"), ve Turkce Windows'ta virgul yerine noktali virgul beklendigi icin
+    sutunlar tek bir hucreye sikisip kaliyordu. Native Excel formati (.xlsx) bu iki
+    sorunu da tamamen ortadan kaldirir -- kodlama/ayirac belirsizligi olmadan
+    doğrudan duzgun acilir.
+    """
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df_or_obj.to_excel(writer, sheet_name="Sonuc")
+    return buf.getvalue()
+
+
+EXCEL_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
 st.set_page_config(page_title="DEA + Malmquist + Panel Analizi", layout="wide")
 st.title("DEA + Gecikmeli Malmquist + Panel Veri Analizi")
 
@@ -156,6 +176,15 @@ if "sonuc" in st.session_state:
     )
 
     with tab_dea:
+        st.markdown("### 📊 DEA (Veri Zarflama Analizi) Sonuçları")
+        st.markdown(
+            "Bu bölüm, her **DMU**'nun (değerlendirilen birimin — örn. bir parça/süreç) kendi "
+            "kaynaklarını (girdi) ne kadar etkin kullanarak çıktı ürettiğini gösterir. Sistem, "
+            "seçtiğiniz dönemdeki her DMU'yu, **benzer girdi/çıktı yapısına sahip diğer DMU'larla** "
+            "karşılaştırıp bir *etkinlik skoru* (theta) üretir. Amaç: hangi birimlerin zaten en iyi "
+            "performansı gösterdiğini (diğerlerine referans/örnek olan DMU'lar) ve etkin olmayan "
+            "birimlerin ne kadar iyileşme potansiyeli taşıdığını ortaya koymaktır."
+        )
         donem_sec = st.selectbox("Donem sec", options=sonuc["veri"]["donem_sirali"], key="dea_donem")
         dea_d = sonuc["dea"][donem_sec]
         n_dmu_donem = len(sonuc["veri"]["dmu_sirali"])
@@ -176,6 +205,13 @@ if "sonuc" in st.session_state:
                 f"🚨 DMU sayısı ({kontrol['n_dmu']}) asgari kuralin (n ≥ {kontrol['onerilen_gevsek']}) altinda."
             )
 
+        st.caption(
+            "**Theta (θ)** her DMU'nun etkinlik skorudur: θ=1.00 -> DMU tam etkin (kendi kaynaklarini "
+            "en iyi kullanan referans birimlerden biri); θ<1.00 -> DMU'nun mevcut ciktiyi ayni "
+            "kaynaklarin (θ) oraninda azaltarak da uretebilecegi anlamina gelir (ne kadar dusukse o "
+            "kadar fazla kaynak israfi var demektir). **CCR** sabit olcege gore getiri varsayar; "
+            "**BCC** olcek buyuklugunun etkisini de hesaba katar (daha esnek, θ_BCC ≥ θ_CCR)."
+        )
         c1, c2 = st.columns(2)
         with c1:
             st.write("**CCR (theta)**")
@@ -184,10 +220,22 @@ if "sonuc" in st.session_state:
             st.write("**BCC (theta)**")
             st.dataframe(dea_d["theta_bcc"].round(4))
         st.write("**Olcek Etkinligi**")
+        st.caption(
+            "Olcek Etkinligi = θ_CCR / θ_BCC. 1.00'e yakinsa DMU'nun buyuklugu (olcegi) uygun; "
+            "1.00'den belirgin sekilde dusukse DMU ya cok kucuk ya da cok buyuk olcekte calisiyor "
+            "olabilir (optimal olcekten uzak)."
+        )
         st.dataframe(dea_d["olcek_etkinligi"].round(4))
 
         st.write("---")
         st.write("**Slack Degerleri (Asama 2 - Maks Slack Modeli)**")
+        st.caption(
+            "Theta, tum girdileri/ciktilari AYNI ORANDA kucultup/buyuterek bulunan etkinlik skorudur. "
+            "Ama bazen theta uygulandiktan sonra bile HALA fazladan azaltilabilecek belirli bir girdi "
+            "ya da HALA artirilabilecek belirli bir cikti kalabilir -- iste bu ek miktara **slack** "
+            "(gevseklik) denir. Girdi slack'i: theta kadar kucultuldukten sonra o girdiden hala ne "
+            "kadar azaltilabilecegi. Cikti slack'i: o ciktidan hala ne kadar daha artirilabilecegi."
+        )
         c3, c4 = st.columns(2)
         with c3:
             st.write("*CCR - Girdi Slack*")
@@ -222,16 +270,33 @@ if "sonuc" in st.session_state:
             )
             st.markdown(dea_aksiyon_metni(aksiyon_tablosu.loc[dmu_sec], girdi_cols, cikti_cols))
 
-        dea_csv_buf = io.StringIO()
-        pd.concat({
+        dea_ozet_df = pd.concat({
             "theta_ccr": dea_d["theta_ccr"], "theta_bcc": dea_d["theta_bcc"],
             "olcek_etkinligi": dea_d["olcek_etkinligi"],
-        }, axis=1).to_csv(dea_csv_buf)
-        st.download_button(f"{donem_sec} DEA ozet sonuclarini CSV indir", dea_csv_buf.getvalue(),
-                            file_name=f"dea_ozet_{donem_sec}.csv", key="dea_csv_dl")
+        }, axis=1)
+        st.download_button(
+            f"{donem_sec} DEA ozet sonuclarini Excel indir", excel_indirme_verisi(dea_ozet_df),
+            file_name=f"dea_ozet_{donem_sec}.xlsx", mime=EXCEL_MIME, key="dea_csv_dl",
+        )
 
     with tab_malmquist:
+        st.markdown("### 📈 Malmquist Verimlilik Endeksi Sonuçları")
+        st.markdown(
+            "DEA sekmesi size TEK BİR dönem için 'şu an ne kadar etkin' bilgisini veriyordu. Bu "
+            "bölüm ise bunu **zaman içine** taşır: bir DMU'nun bir dönemden sonrakine geçerken "
+            "verimliliğinin arttığını mı azaldığını mı, ve bu değişimin ne kadarının *kendi "
+            "performansını iyileştirmesinden* (EC), ne kadarının *genel teknoloji/yöntem "
+            "ilerlemesinden* (TC) kaynaklandığını gösterir."
+        )
         st.write("**EC / TC / M degerleri (ardisik donem gecisleri)**")
+        st.caption(
+            "**EC (Etkinlik Degisimi):** DMU'nun kendi potansiyel sinirina (frontier) ne kadar "
+            "yaklastigi/uzaklastigi -- yonetim/operasyonel iyilesme sinyalidir. **TC (Teknoloji "
+            "Degisimi):** en iyi uygulama sinirinin kendisinin zaman icinde ne kadar ilerledigi -- "
+            "genelde arac/yontem degisikliginden kaynaklanir, tum DMU'lari ayni sekilde etkiler. "
+            "**M (Malmquist Endeksi = EC × TC):** toplam verimlilik degisimi. M>1 -> verimlilik "
+            "artmis; M<1 -> azalmis; M=1 -> degisim yok."
+        )
         st.dataframe(sonuc["malmquist"].round(4), width='stretch')
 
         st.write("---")
@@ -253,25 +318,63 @@ if "sonuc" in st.session_state:
         )
         st.markdown(malmquist_yorum_metni(malmquist_df.loc[secim]))
 
-        csv_buf = io.StringIO()
-        sonuc["malmquist"].to_csv(csv_buf)
-        st.download_button("Malmquist sonuclarini CSV indir", csv_buf.getvalue(),
-                            file_name="malmquist_sonuclari.csv")
+        st.download_button(
+            "Malmquist sonuclarini Excel indir", excel_indirme_verisi(sonuc["malmquist"]),
+            file_name="malmquist_sonuclari.xlsx", mime=EXCEL_MIME, key="malmquist_csv_dl",
+        )
 
     with tab_panel:
+        st.markdown("### 📐 Panel Veri Analizi Sonuçları")
+        st.markdown(
+            "Bu bölüm, DMU'ların girdi/çıktı değerleri (örn. SİMÜLASYON_SÜRESİ, MALİYET) ile "
+            "Malmquist verimlilik endeksi (MI) arasındaki **istatistiksel ilişkiyi** inceler. Amaç: "
+            "'hangi değişkenler verimliliği artırıyor/azaltıyor, ne yönde ve ne kadar güçlü' sorusuna "
+            "cevap vermektir. Bunun için önce en uygun istatistiksel modeli (Pooled OLS / Sabit "
+            "Etkiler / Rastgele Etkiler) seçer, sonra bu modelin ne kadar güvenilir olduğunu (katsayı "
+            "kararlılığı gibi ek testlerle) sınar."
+        )
         p = sonuc["panel_sonuc"]
         st.write("**Korelasyon Matrisi**")
+        st.caption(
+            "Degiskenler arasindaki DOGRUSAL iliskinin yonu ve gucu (-1 ile +1 arasi). +1'e yakin: "
+            "birlikte artiyorlar; -1'e yakin: biri artarken digeri azaliyor; 0'a yakin: aralarinda "
+            "dogrusal bir iliski yok. Bagimsiz degiskenler arasindaki YUKSEK korelasyonlar (orn. "
+            "|r|>0.8), asagidaki VIF testinde de goreceginiz coklu dogrusal baglanti riskine isaret eder."
+        )
         st.dataframe(p["corr"].round(3))
         st.write("**VIF**")
+        st.caption(
+            "VIF (Variance Inflation Factor): bir degiskenin, MODELDEKI DIGER degiskenler tarafindan "
+            "ne kadar 'aciklanabildigini' gosterir. VIF=1 -> digerleriyle hic ortusmuyor (ideal); "
+            "VIF≥5 literaturde genellikle 'coklu dogrusal baglanti sorunu var' esigi olarak kabul "
+            "edilir -- bu durumda o degiskenin KENDI etkisini digerlerinden ayirt etmek zorlasir."
+        )
         st.dataframe(p["vif"].round(3))
 
+        st.caption(
+            "Asagidaki uc test, panel veriye hangi modelin (Pooled OLS / Sabit Etkiler-FE / Rastgele "
+            "Etkiler-RE) en uygun oldugunu SIRAYLA belirler:"
+        )
+        st.caption(
+            "**1) Poolability F-testi:** DMU'lar arasinda sabit bir fark var mi, yoksa hepsi ayni "
+            "davranisi mi sergiliyor? (p<0.05 ise fark var -> Pooled OLS yetersiz)"
+        )
         st.write(f"**Poolability F-testi (Pooled vs FE):** stat={p['poolability'].get('stat', 'NA'):.4f}, "
                  f"p={p['poolability'].get('pval', 'NA'):.4f} -> {p['poolability'].get('sonuc','')}")
+        st.caption(
+            "**2) Breusch-Pagan LM testi:** Ayni soruyu (DMU'lara ozgu bir etki var mi) farkli bir "
+            "istatistiksel yontemle sinar -- Poolability testinin tamamlayicisidir."
+        )
         if "pval" in p.get("bp_lm", {}):
             st.write(f"**Breusch-Pagan LM testi (Pooled vs RE):** stat={p['bp_lm']['stat']:.4f}, "
                      f"p={p['bp_lm']['pval']:.4f} (N={p['bp_lm']['N']}, T={p['bp_lm']['T']})")
         else:
             st.write(f"**Breusch-Pagan LM testi:** hesaplanamadi ({p.get('bp_lm', {}).get('hata', 'bilinmeyen hata')})")
+        st.caption(
+            "**3) Hausman testi:** Eger DMU'lara ozgu bir etki varsa, bu etki aciklayici degiskenlerle "
+            "iliskili mi degil mi sorusunu sinar -> Sabit Etkiler (FE) mi, Rastgele Etkiler (RE) mi "
+            "daha uygun oldugunu belirler (p<0.05 -> FE, p≥0.05 -> RE tercih edilebilir)."
+        )
         st.write(f"**Hausman testi:** chi2={p['hausman']['stat']:.4f}, dof={p['hausman']['dof']}, "
                  f"p={p['hausman']['pval']:.4f}")
         st.write(f"**Secilen model:** {p['secilen_model']}")
@@ -294,6 +397,13 @@ if "sonuc" in st.session_state:
             f"ulasildigini gosteren ara adimlardir."
         )
 
+        st.caption(
+            "Asagidaki uc tablo, ayni veriye uc farkli model varsayimiyla (Pooled/FE/RE) bakar. "
+            "Her tabloda: **Katsayi** = o degiskenin MI uzerindeki tahmini etkisi (yon ve buyukluk); "
+            "**P-degeri** < 0.05 (bazi yerlerde 0.10) ise etki istatistiksel olarak anlamli kabul "
+            "edilir; **Alt/Ust CI** ise katsayinin %95 guvenle icinde olduğu araligi gosterir. "
+            "Hangisinin 'dogru' oldugunu yukaridaki 3 test (Poolability, BP-LM, Hausman) belirler."
+        )
         st.write("**Pooled OLS**")
         st.dataframe(reg_meta_table(p["pooled"]), width='stretch', hide_index=True)
         st.dataframe(reg_params_table(p["pooled"]), width='stretch')
@@ -401,11 +511,9 @@ if "sonuc" in st.session_state:
                 with st.expander("Detay: Her DMU cikarildiginda katsayilar"):
                     st.dataframe(kr["detay_df"].reset_index(), width='stretch', hide_index=True)
 
-                kararlilik_csv_buf = io.StringIO()
-                kr["ozet_df"].to_csv(kararlilik_csv_buf)
                 st.download_button(
-                    "Kararlilik testi ozetini CSV indir", kararlilik_csv_buf.getvalue(),
-                    file_name="kararlilik_ozet.csv", key="kararlilik_csv_dl",
+                    "Kararlilik testi ozetini Excel indir", excel_indirme_verisi(kr["ozet_df"]),
+                    file_name="kararlilik_ozet.xlsx", mime=EXCEL_MIME, key="kararlilik_csv_dl",
                 )
         st.write("---")
 
@@ -549,11 +657,9 @@ if "sonuc" in st.session_state:
                 "'Hedefli' degisken bulunamadigi durumlarda temkinli yorumlanmalidir."
             )
 
-            gelecek_csv_buf = io.StringIO()
-            s["detay"].to_csv(gelecek_csv_buf)
             st.download_button(
-                f"{senaryo_sec} senaryo detay tablosunu CSV indir", gelecek_csv_buf.getvalue(),
-                file_name=f"gelecek_senaryo_{senaryo_sec.lower()}.csv", key="gelecek_csv_dl",
+                f"{senaryo_sec} senaryo detay tablosunu Excel indir", excel_indirme_verisi(s["detay"]),
+                file_name=f"gelecek_senaryo_{senaryo_sec.lower()}.xlsx", mime=EXCEL_MIME, key="gelecek_csv_dl",
             )
 
     with tab_backtest:
@@ -642,11 +748,9 @@ if "sonuc" in st.session_state:
                     "Kirmizi satirlar: yonun yanlis tahmin edildigi DMU'lar."
                 )
 
-                backtest_csv_buf = io.StringIO()
-                bt["tahmin_df"].to_csv(backtest_csv_buf)
                 st.download_button(
-                    "Backtest sonuclarini CSV indir", backtest_csv_buf.getvalue(),
-                    file_name="backtest_sonuclari.csv", key="backtest_csv_dl",
+                    "Backtest sonuclarini Excel indir", excel_indirme_verisi(bt["tahmin_df"]),
+                    file_name="backtest_sonuclari.xlsx", mime=EXCEL_MIME, key="backtest_csv_dl",
                 )
 
 
