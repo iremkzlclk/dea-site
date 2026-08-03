@@ -333,7 +333,7 @@ if "sonuc" in st.session_state:
 
         anlamli_grafik = analiz_df[analiz_df["anlamli_mi"]].set_index("degisken")["mi_etkisi_yuzde10"]
         if not anlamli_grafik.empty:
-            st.write("*Anlamli (p<0.05) degiskenlerin %10'luk degisim etkisi -- gorsel yon:*")
+            st.write("*Anlamli (p<0.10) degiskenlerin %10'luk degisim etkisi -- gorsel yon:*")
             st.bar_chart(anlamli_grafik)
 
         st.markdown(panel_aksiyon_metni(analiz_df))
