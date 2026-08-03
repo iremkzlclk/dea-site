@@ -24,7 +24,11 @@ from yorumlama import (
 
 
 def reg_params_table(res):
-    """linearmodels regresyon sonucunu tek bir tidy DataFrame'e cevirir."""
+    """linearmodels regresyon sonucunu tek bir tidy DataFrame'e cevirir.
+    Cok kucuk p-degerleri (<0.0001), 4 ondalige yuvarlaninca '0.0000' gorunup
+    'gercekten sifir mi' izlenimi yaratmasin diye akademik yazimin standardi
+    olan '<0.0001' bicimiyle gosterilir (p GERCEKTE sifir degildir, sadece
+    cok kucuktur)."""
     ci = res.conf_int()
     ci.columns = ["Alt CI (%95)", "Ust CI (%95)"]
     tablo = pd.DataFrame({
@@ -33,7 +37,11 @@ def reg_params_table(res):
         "T-istatistigi": res.tstats,
         "P-degeri": res.pvalues,
     }).join(ci)
-    return tablo.round(4)
+    tablo = tablo.round(4)
+    tablo["P-degeri"] = res.pvalues.apply(
+        lambda p: "<0.0001" if p < 0.0001 else f"{p:.4f}"
+    )
+    return tablo
 
 
 def reg_meta_table(res):
@@ -159,6 +167,12 @@ if uploaded is not None:
                 sonuc = run_pipeline(uploaded, bagimsizlar=bagimsizlar)
 
             st.session_state["sonuc"] = sonuc
+            # Onceki dosyaya ait alt-sekme sonuclarini temizle -- aksi halde farkli bir
+            # DMU/donem setine sahip yeni bir dosya yuklendiginde, eski sonuclar (gelecek
+            # senaryosu, backtest, kararlilik testi) yeni DMU/degisken listesiyle uyusmayip
+            # KeyError'a yol acabilir (secim kutulari yeni veriden, sonuc eskisinden gelir).
+            for eski_anahtar in ["gelecek", "backtest", "kararlilik"]:
+                st.session_state.pop(eski_anahtar, None)
 
     except VeriDogrulamaHatasi as e:
         st.error(f"Veri dogrulama hatasi: {e}")
@@ -557,15 +571,22 @@ if "sonuc" in st.session_state:
         Izlenen yontem (**ceteris paribus** -- sadece kanit oldugu degiskenler degisir,
         gerisi sabit tutulur):
 
-        1. **Panel-DEA tutarlilik kontrolu → Hedefli / Dogal ayrimi:** panelde ANLAMLI
-           **ve** DEA teorisiyle (Girdi→negatif, Cikti→pozitif) TUTARLI degiskenler
-           "Hedefli" kabul edilir -- SADECE bunlar deliberate olarak degistirilir.
-        2. **Hedefli degiskenler:** katsayinin isaretine gore (azalt/artir), son donem
-           degerinin %5 / %10 / %15'i kadar degistirilir; bu hareketin MI uzerindeki
-           tahmini etkisi de (katsayi x degisim) ayrica raporlanir.
-        3. **Digerleri (Dogal):** ceteris paribus -- son donem degeriyle AYNEN
-           birakilir, hicbir sekilde degistirilmez. VIF≥5 olanlar icin (hedefli
-           degiskenlerle yuksek korelasyon) sadece bilgi amacli bir uyari eklenir.
+        1. **Karar degiskeni ayrimi → Hedefli / Dogal:** SADECE GIRDI degiskenleri
+           "Hedefli" olabilir -- cunku donem basinda karar verebileceginiz sey
+           girdidir (orn. simulasyon suresi, maliyet), cikti (dogruluk, azaltilan
+           prototip sayisi) donem SONUNDA gozlemlenen bir sonuctur, onceden karar
+           verilemez. Girdi, panel modelinde ANLAMLIYSA (p<0.10) Hedefli sayilir --
+           DEA teorisiyle (girdi→negatif katsayi beklentisi) TUTARLI olmasi
+           ARANMAZ; yon dogrudan katsayinin GERCEK isaretinden alinir. Teoriyle
+           celisen durumlar yine de ⚠️ isaretlenir (seffaflik icin), ama Hedefli
+           olmaktan alikonmaz.
+        2. **Hedefli degiskenler:** katsayinin GERCEK isaretine gore (artir/azalt),
+           son donem degerinin %5 / %10 / %15'i kadar degistirilir; bu hareketin
+           MI uzerindeki tahmini etkisi de (katsayi x degisim) ayrica raporlanir.
+        3. **Digerleri (Dogal -- tum cikti degiskenleri + anlamsiz girdiler):**
+           ceteris paribus -- son donem degeriyle AYNEN birakilir, hicbir sekilde
+           degistirilmez. VIF≥5 olanlar icin (hedefli degiskenlerle yuksek
+           korelasyon) sadece bilgi amacli bir uyari eklenir.
         4. **Sinir kontrolleri:** Hedefli degiskenlerin projeksiyonu, DMU'nun kendi
            tarihsel araligina gore makul bir bant disina cikamaz; negatif deger
            asla uretilmez.
@@ -594,9 +615,10 @@ if "sonuc" in st.session_state:
             hedefli_sayi = (gelecek["siniflandirma"]["siniflandirma"] == "Hedefli").sum()
             if hedefli_sayi == 0:
                 st.info(
-                    "Bu modelde 'Hedefli' (anlamli + DEA teorisiyle tutarli) degisken bulunamadi -- "
-                    "tum degiskenler yalnizca kendi tarihsel trendini takip ediyor (Temkinli/Baz/Iyimser "
-                    "senaryolari bu nedenle birbirine yakin ya da ayni cikabilir)."
+                    "Bu modelde 'Hedefli' (anlamli bir GIRDI) degisken bulunamadi -- cikti "
+                    "degiskenleri zaten hicbir zaman Hedefli olamiyor, ve hicbir girdi de panelde "
+                    "anlamli cikmadi. Tum degiskenler ceteris paribus sabit kaliyor (%5/%10/%15 "
+                    "senaryolari bu nedenle birbirinin ayni cikacaktir)."
                 )
 
             st.write("---")
@@ -625,7 +647,14 @@ if "sonuc" in st.session_state:
                 "DMU sec (senaryo detay tablosu icin)", options=sonuc["veri"]["dmu_sirali"],
                 key="gelecek_dmu_sec",
             )
-            st.dataframe(s["detay"].loc[dmu_sec_gelecek], width='stretch')
+            detay_dmu_listesi = s["detay"].index.get_level_values("DMU").unique()
+            if dmu_sec_gelecek not in detay_dmu_listesi:
+                st.warning(
+                    "Bu senaryo sonucu farkli bir veri setine ait gorunuyor (DMU eslesmiyor). "
+                    "Lutfen 'Gelecek Donem Senaryosunu Hesapla' butonuna tekrar basin."
+                )
+            else:
+                st.dataframe(s["detay"].loc[dmu_sec_gelecek], width='stretch')
 
             st.write("---")
             st.markdown("#### Projeksiyon Donemi DEA Sonuclari")

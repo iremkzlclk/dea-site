@@ -5,29 +5,37 @@ GELECEK DONEM SENARYO MODULU (ceteris paribus tasarimi)
 Panel analizindeki NIHAI modelin katsayilarini kullanarak, SADECE SON
 DONEMIN verilerini temel alan bir "bir sonraki donem" senaryosu uretir.
 
-Tasarim (kullanicinin talebiyle sadelestirildi):
-  1) Panel-DEA tutarlilik kontrolu -> Hedefli / Dogal ayrimi
-     Panel modelinde ANLAMLI (p < HEDEFLI_ALPHA) VE DEA teorik beklentisiyle
-     (Girdi -> negatif, Cikti -> pozitif) TUTARLI olan degiskenler "Hedefli"
-     kabul edilir. Sadece bu degiskenler deliberate olarak degistirilir.
+Tasarim (kullanicinin talebiyle guncellendi):
+  1) Panel-Karar Degiskeni ayrimi -> Hedefli / Dogal
+     SADECE GIRDI degiskenleri "Hedefli" (deliberate degistirilebilir) olabilir.
+     Cikti degiskenleri HICBIR ZAMAN Hedefli olamaz -- cunku cikti (dogruluk,
+     azaltilan prototip sayisi vb.) donem BASINDA karar verilebilecek bir
+     degisken degildir, donem SONUNDA gozlemlenen bir SONUCTUR. Bir DMU
+     "dogruluk_gunum %10 artsin" diye karar veremez; ama "simulasyon suresine
+     %10 daha fazla kaynak ayirayim" diye karar VEREBILIR. Bu yuzden:
+       - Girdi degiskeni + panel modelinde ANLAMLI (p < HEDEFLI_ALPHA) -> Hedefli
+       - Cikti degiskeni (anlamli olsa bile) -> HER ZAMAN Dogal
+       - Anlamsiz girdi degiskeni -> Dogal
+     DEA teorisiyle (girdi->negatif katsayi beklentisi) TUTARLILIK ARANMAZ:
+     panel katsayisinin ISARETI ne olursa olsun (teorik beklentiyle celisse
+     bile) yon dogrudan bu isaretten alinir. Teoriyle celisen durumlar yine de
+     'celiski' olarak ISARETLENIR (seffaflik icin), ama Hedefli olmaktan
+     ALIKOYMAZ.
 
-  2) Hedefli degiskenler -> katsayinin isaret ettigi yonde, son donem
+  2) Hedefli degiskenler -> katsayinin GERCEK isaretine gore, son donem
      degerinin SABIT BIR YUZDESI kadar degistirilir:
-       yon                = katsayinin isareti (girdi->azalt, cikti->artir)
+       yon                = katsayinin isareti (pozitif->artir, negatif->azalt)
        yeni_deger         = son_deger x (1 + yon x yuzde)
        tahmini MI etkisi  = katsayi x (yeni_deger - son_deger)   [rapor amacli]
      Yuzde SABIT tutulur -- katsayinin buyuklugu ADIMI degil, SADECE yonu ve
      raporlanan MI etkisini belirler.
 
-  3) Digerleri (Dogal) -> CETERIS PARIBUS: son donem degeriyle AYNEN
-     birakilir, hicbir sekilde degistirilmez. Boylece senaryo, SADECE
-     istatistiksel kanit oldugu degiskenlerin etkisini izole eder; "digerleri
-     de kendiliginden degisirdi" varsayimi (ve bunun getirdigi korelasyon
-     belirsizligi) devreye sokulmaz. Bu degiskenlerden VIF>=5 olanlar icin
-     -- yani hedefli degiskenlerle yuksek coklu dogrusal iliski icinde
-     olanlar icin -- salt BILGI AMACLI bir not eklenir (gercekte hedefli
-     degiskenle birlikte hareket edebilecegi hatirlatilir), ama SAYISAL
-     olarak degistirilmezler.
+  3) Digerleri (Dogal -- tum cikti degiskenleri + anlamsiz girdiler) ->
+     CETERIS PARIBUS: son donem degeriyle AYNEN birakilir, hicbir sekilde
+     degistirilmez. Bu degiskenlerden VIF>=5 olanlar icin -- yani hedefli
+     degiskenlerle yuksek coklu dogrusal iliski icinde olanlar icin -- salt
+     BILGI AMACLI bir not eklenir (gercekte hedefli degiskenle birlikte
+     hareket edebilecegi hatirlatilir), ama SAYISAL olarak degistirilmezler.
 
   4) Sinir kontrolleri (yalnizca Hedefli degiskenler icin islevsel):
      Projeksiyon, DMU'nun kendi tarihsel min/max araligina gore makul bir
@@ -58,12 +66,20 @@ def _tarihsel_seri(X: dict, Y: dict, donemler: list, dmu: str, degisken: str, gi
 
 def hedefli_dogal_siniflandir(nihai_res, girdi_cols, cikti_cols, alpha: float = HEDEFLI_ALPHA) -> pd.DataFrame:
     """
-    Panel modelindeki her bagimsiz degiskeni 'Hedefli' (anlamli + DEA
-    teorisiyle tutarli -> iyilesme yonunde deliberate itilir) veya 'Dogal'
-    (anlamsiz ya da teoriyle celisen -> ceteris paribus sabit birakilir)
-    olarak siniflandirir. Ayrim mantigi panel_module/yorumlama'daki
-    panel_aksiyon_analizi ile ayni (celiski tanimi dahil), boylece panel
-    sekmesindeki yorumla senaryo sekmesi tutarli kalir.
+    Panel modelindeki her bagimsiz degiskeni 'Hedefli' (deliberate degistirilir)
+    veya 'Dogal' (ceteris paribus sabit birakilir) olarak siniflandirir.
+
+    ONEMLI: SADECE GIRDI degiskenleri Hedefli olabilir -- cikti degiskenleri
+    (dogruluk, azaltilan prototip sayisi vb.) donem basinda karar verilebilecek
+    degiskenler degil, donem sonunda GOZLEMLENEN sonuclardir; bu yuzden hicbir
+    zaman deliberate degistirilmezler.
+
+    Girdi bir degisken icin Hedefli sayilmasinin TEK sarti panel modelinde
+    ANLAMLI olmasidir (p < alpha) -- katsayinin isareti DEA teorisiyle
+    (girdi -> negatif beklentisi) TUTARLI olmak ZORUNDA DEGILDIR; yon
+    dogrudan katsayinin GERCEK isaretinden alinir. Teoriyle celisen durumlar
+    yine de 'celiski' sutununda ISARETLENIR (seffaflik/rapor amacli), ama bu
+    durum degiskeni Hedefli olmaktan ALIKOYMAZ.
     """
     satirlar = []
     for degisken in nihai_res.params.index:
@@ -74,16 +90,20 @@ def hedefli_dogal_siniflandir(nihai_res, girdi_cols, cikti_cols, alpha: float = 
         anlamli = p < alpha
 
         if degisken in girdi_cols:
-            tip, beklenen_yon = "Girdi", -1   # MI'yi iyilestirmek icin azalma beklenir
+            tip, beklenen_yon = "Girdi", -1   # DEA teorisinin beklentisi (sadece bilgi/celiski amacli)
         elif degisken in cikti_cols:
-            tip, beklenen_yon = "Cikti", +1   # MI'yi iyilestirmek icin artis beklenir
+            tip, beklenen_yon = "Cikti", +1
         else:
             tip, beklenen_yon = "Diger", 0
 
         gercek_yon = 1 if katsayi > 0 else -1
         celiski = anlamli and beklenen_yon != 0 and gercek_yon != beklenen_yon
-        hedefli = anlamli and (not celiski) and beklenen_yon != 0
-        iyilesme_yonu = beklenen_yon if hedefli else 0
+
+        # SADECE girdi + anlamli -> Hedefli. Cikti hicbir zaman Hedefli olamaz.
+        hedefli = anlamli and (tip == "Girdi")
+        # Yon, DOGRUDAN katsayinin gercek isaretinden gelir (teori beklentisinden degil):
+        # katsayi>0 -> degiskeni ARTIR (MI'yi artirir); katsayi<0 -> AZALT.
+        iyilesme_yonu = gercek_yon if hedefli else 0
 
         satirlar.append({
             "degisken": degisken, "tip": tip, "katsayi": round(katsayi, 5), "p_degeri": round(p, 4),
@@ -131,19 +151,29 @@ def senaryo_olustur(X: dict, Y: dict, donemler: list, nihai_res, girdi_cols, cik
                          (siniflandirma.loc[degisken, "siniflandirma"] == "Hedefli")
 
             if is_hedefli:
-                # --- Hedefli: katsayi yonunde, SABIT YUZDE buyuklugunde deliberate degisim ---
+                # --- Hedefli: SADECE girdi + anlamli -> katsayinin GERCEK isareti yonunde,
+                # SABIT YUZDE buyuklugunde deliberate degisim (DEA teori tutarliligi aranmaz) ---
                 yon = siniflandirma.loc[degisken, "iyilesme_yonu"]
                 taban = son_deger if son_deger > 0 else NOMINAL_ADIM
                 yeni_deger = son_deger + yon * taban * yuzde
                 katsayi = siniflandirma.loc[degisken, "katsayi"]
+                celiski_mi = bool(siniflandirma.loc[degisken, "celiski"])
                 tahmini_mi_etkisi = katsayi * (yeni_deger - son_deger)
                 tip_uygulanan = "Hedefli"
                 not_metni = (
-                    f"Panel modelinde anlamli ve DEA teorisiyle tutarli (katsayi={katsayi}, "
-                    f"p={siniflandirma.loc[degisken,'p_degeri']}); iyilesme yonunde "
-                    f"({'azalt' if yon < 0 else 'artir'}) son donem degerinin %{yuzde*100:g}'i kadar "
-                    f"deliberate degistirildi. Tahmini MI etkisi ≈ {tahmini_mi_etkisi:+.4f}."
+                    f"Girdi degiskeni, panel modelinde anlamli (katsayi={katsayi}, "
+                    f"p={siniflandirma.loc[degisken,'p_degeri']}); katsayinin GERCEK isareti "
+                    f"yonunde ({'artir' if yon > 0 else 'azalt'}) son donem degerinin "
+                    f"%{yuzde*100:g}'i kadar deliberate degistirildi. Tahmini MI etkisi "
+                    f"≈ {tahmini_mi_etkisi:+.4f}."
                 )
+                if celiski_mi:
+                    not_metni += (
+                        " ⚠️ Not: bu yon, DEA teorisinin beklentisiyle (girdi icin negatif "
+                        "katsayi) CELISIYOR -- yine de panel katsayisinin kendi isaretine "
+                        "guvenilerek uygulandi; sonucu yorumlarken bu celiskiyi goz onunde "
+                        "bulundurun (icsel devirsellik/omitted variable riski olabilir)."
+                    )
 
                 # --- Sinir kontrolleri (yalniz Hedefli icin islevsel) ---
                 hist_min, hist_max = min(degerler), max(degerler)
@@ -157,23 +187,30 @@ def senaryo_olustur(X: dict, Y: dict, donemler: list, nihai_res, girdi_cols, cik
                     not_metni += " ⚠️ Tarihsel bant sinirlamasi nedeniyle deger kirpildi (asiri ekstrapolasyon onlendi)."
             else:
                 # --- Dogal: CETERIS PARIBUS -- son donem degeriyle aynen birakilir ---
+                # (butun cikti degiskenleri + anlamsiz girdiler buraya duser)
                 yeni_deger = son_deger
                 tahmini_mi_etkisi = 0.0
                 sinir_uygulandi = False
                 tip_uygulanan = "Dogal (degismedi - ceteris paribus)"
-                if yuksek_vif:
-                    not_metni = (
-                        f"VIF={vif_deger:.2f} (>= {VIF_ESIGI:g}) -- hedefli degiskenler dahil diger "
-                        f"regresorlerle yuksek coklu dogrusal iliski icinde. Deliberate olarak "
-                        f"degistirilmedi (ceteris paribus varsayimi); ancak GERCEKTE hedefli "
-                        f"degiskenle birlikte hareket edebilecegini unutmayin (bilgi amacli uyari, "
-                        f"sayisal olarak dikkate alinmadi)."
+                if degisken in cikti_cols:
+                    temel_not = (
+                        "Cikti degiskeni -- donem basinda karar verilebilecek bir degisken "
+                        "degil, donem sonunda gozlemlenen bir sonuc oldugu icin hicbir zaman "
+                        "deliberate degistirilmez."
                     )
                 else:
-                    not_metni = (
-                        "Panelde anlamsiz veya teoriyle celisen (ya da modelde yer almayan); deliberate "
-                        "olarak degistirilmedi, son donem degeriyle ayni birakildi (ceteris paribus)."
+                    temel_not = (
+                        "Girdi degiskeni, panelde anlamsiz -- deliberate olarak degistirilmedi."
                     )
+                if yuksek_vif:
+                    not_metni = (
+                        f"{temel_not} Ayrica VIF={vif_deger:.2f} (>= {VIF_ESIGI:g}) -- hedefli "
+                        f"degiskenler dahil diger regresorlerle yuksek coklu dogrusal iliski "
+                        f"icinde; GERCEKTE hedefli degiskenle birlikte hareket edebilecegini "
+                        f"unutmayin (bilgi amacli uyari, sayisal olarak dikkate alinmadi)."
+                    )
+                else:
+                    not_metni = f"{temel_not} Son donem degeriyle ayni birakildi (ceteris paribus)."
 
             if degisken in girdi_cols:
                 X_next.loc[dmu, degisken] = yeni_deger
