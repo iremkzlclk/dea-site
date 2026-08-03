@@ -56,6 +56,8 @@ def run_pipeline(dosya_yolu, bagimsizlar=None):
 
     return {
         "veri": veri,
+        "X": X,
+        "Y": Y,
         "dea": dea_sonuclari,
         "malmquist": malmquist_df,
         "panel_df": panel_df,

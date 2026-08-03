@@ -97,6 +97,36 @@ def malmquist_yorum_metni(row: pd.Series) -> str:
     return f"{genel}\n- {ec_metin}\n- {tc_metin}"
 
 
+def malmquist_donem_ortalamasi(malmquist_df: pd.DataFrame, donem_sirasi=None) -> pd.DataFrame:
+    """
+    Her gecis donemi (t -> t+1) icin, TUM DMU'lar uzerinden EC/TC/M ortalamasini
+    (Malmquist endeksi literaturunun standart "donem ozeti" gosterimi) uretir.
+
+    Geometrik ortalama kullanilir: EC/TC/M birer ORAN (indeks) oldugu icin
+    (Fare vd. 1994'ten beri Malmquist literaturunde standart pratik) aritmetik
+    ortalama yaniltici olabilir -- ornegin M=[0.5, 2.0] icin aritmetik ortalama
+    1.25 "net artis" izlenimi verirken, gercekte iki donem birbirini tam
+    dengeliyor (gecometrik ortalama = 1.0).
+
+    malmquist_df: index=[DMU, donem], columns=[EC, TC, M]
+    donem_sirasi: donemlerin KRONOLOJIK sirali listesi (orn. veri["donem_sirali"][:-1])
+                  -- verilirse tablo bu sirada gosterilir, verilmezse alfabetik siralanir.
+
+    Returns: DataFrame(index=donem, columns=[EC_ort, TC_ort, M_ort])
+    """
+    from scipy.stats import gmean
+
+    ozet = malmquist_df.groupby(level="donem").agg(
+        EC_ort=("EC", gmean),
+        TC_ort=("TC", gmean),
+        M_ort=("M", gmean),
+    )
+    if donem_sirasi is not None:
+        sira = [d for d in donem_sirasi if d in ozet.index]
+        ozet = ozet.loc[sira]
+    return ozet.round(4)
+
+
 # ------------------------------------------------------------------
 # 3) PANEL YORUMLAMA (en onemli katman)
 # ------------------------------------------------------------------

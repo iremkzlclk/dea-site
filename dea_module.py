@@ -89,6 +89,44 @@ def solve_dea_period(x_df: pd.DataFrame, y_df: pd.DataFrame):
     }
 
 
+def min_dmu_kontrolu(n_girdi: int, n_cikti: int, n_dmu: int) -> dict:
+    """
+    DEA literaturunde yaygin kabul goren minimum DMU sayisi kurallari.
+
+    En sik atif yapilan iki kural:
+      - Siki kural (Cooper, Seiford & Tone, 2007; Golany & Roll, 1989):
+            n >= max(girdi_sayisi * cikti_sayisi, 3*(girdi_sayisi + cikti_sayisi))
+      - Gevsek/asgari kural (Bowlin, 1998; Dyson vd., 2001):
+            n >= 2*(girdi_sayisi + cikti_sayisi)
+
+    Bu kurallarin mantigi: DEA'nin ayrim gucu (discriminatory power), girdi+cikti
+    sayisina (serbestlik derecesi) kiyasla DMU sayisi azaldikca hizla dusuyor --
+    az DMU / cok degisken durumunda cogu DMU "yapay olarak" etkin (theta=1) cikabilir.
+
+    Returns: dict -- n_girdi, n_cikti, n_dmu, onerilen_siki, onerilen_gevsek, seviye
+             seviye: "yeterli" | "asgari" | "yetersiz"
+    """
+    m, s = n_girdi, n_cikti
+    onerilen_siki = max(m * s, 3 * (m + s))
+    onerilen_gevsek = 2 * (m + s)
+
+    if n_dmu >= onerilen_siki:
+        seviye = "yeterli"
+    elif n_dmu >= onerilen_gevsek:
+        seviye = "asgari"
+    else:
+        seviye = "yetersiz"
+
+    return {
+        "n_girdi": m,
+        "n_cikti": s,
+        "n_dmu": n_dmu,
+        "onerilen_siki": onerilen_siki,
+        "onerilen_gevsek": onerilen_gevsek,
+        "seviye": seviye,
+    }
+
+
 if __name__ == "__main__":
     # GAMS kodundaki 2024 - 12 DMU verisiyle test
     x = pd.DataFrame({
@@ -107,3 +145,5 @@ if __name__ == "__main__":
     print("theta_ccr:\n", sonuc["theta_ccr"].round(4))
     print("\ntheta_bcc:\n", sonuc["theta_bcc"].round(4))
     print("\nolcek_etkinligi:\n", sonuc["olcek_etkinligi"].round(4))
+
+    print("\nMin DMU kontrolu:", min_dmu_kontrolu(len(x.columns), len(y.columns), len(x.index)))

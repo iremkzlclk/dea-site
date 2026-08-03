@@ -8,8 +8,16 @@ import streamlit as st
 import pandas as pd
 import io
 from excel_okuma import excel_oku, donemlere_ayir, VeriDogrulamaHatasi
+from dea_module import min_dmu_kontrolu
 from pipeline import run_pipeline
-from yorumlama import malmquist_yorum_metni
+from yorumlama import (
+    malmquist_yorum_metni,
+    malmquist_donem_ortalamasi,
+    dea_aksiyon_tablosu,
+    dea_aksiyon_metni,
+    panel_aksiyon_analizi,
+    panel_aksiyon_metni,
+)
 
 
 def reg_params_table(res):
@@ -41,6 +49,18 @@ def comparison_tables(comp):
     tstat = comp.tstats.round(3)
     ozet = pd.DataFrame({"R-kare": comp.rsquared}).join(comp.f_statistic).round(4)
     return katsayi, tstat, ozet
+
+
+def _katsayi_renklendir(row):
+    """Panel etki tablosunda mi_etkisi_yuzde10 isaretine gore satiri renklendirir."""
+    if row["mi_etkisi_yuzde10"] > 0:
+        renk = "background-color: #d4f7d4"  # yesilimsi -- pozitif etki
+    elif row["mi_etkisi_yuzde10"] < 0:
+        renk = "background-color: #f7d4d4"  # kirmizimsi -- negatif etki
+    else:
+        renk = ""
+    return [renk] * len(row)
+
 
 st.set_page_config(page_title="DEA + Malmquist + Panel Analizi", layout="wide")
 st.title("DEA + Gecikmeli Malmquist + Panel Veri Analizi")
@@ -76,6 +96,34 @@ if uploaded is not None:
             f"{len(veri_onizleme['girdi_cols'])} girdi, {len(veri_onizleme['cikti_cols'])} cikti."
         )
 
+        # --- Minimum DMU sayisi kontrolu (yukleme aninda erken uyari) ---
+        kontrol = min_dmu_kontrolu(
+            len(veri_onizleme["girdi_cols"]), len(veri_onizleme["cikti_cols"]),
+            len(veri_onizleme["dmu_sirali"]),
+        )
+        if kontrol["seviye"] == "yeterli":
+            st.info(
+                f"ℹ️ DMU sayınız ({kontrol['n_dmu']}), literatürdeki yaygın kural olan "
+                f"n ≥ max(girdi×çıktı, 3×(girdi+çıktı)) = **{kontrol['onerilen_siki']}** eşiğini "
+                f"karşılıyor ({kontrol['n_girdi']} girdi × {kontrol['n_cikti']} çıktı için)."
+            )
+        elif kontrol["seviye"] == "asgari":
+            st.warning(
+                f"⚠️ DMU sayınız ({kontrol['n_dmu']}), literatürdeki daha sıkı kuralı "
+                f"(n ≥ {kontrol['onerilen_siki']} = max(girdi×çıktı, 3×(girdi+çıktı))) karşılamıyor, "
+                f"ancak daha gevşek asgari kuralın (n ≥ 2×(girdi+çıktı) = {kontrol['onerilen_gevsek']}) "
+                f"üzerinde. Modelin ayrım gücü (discriminatory power) sınırlı olabilir — etkin DMU "
+                f"sayısı orantısız yüksek çıkabilir."
+            )
+        else:
+            st.error(
+                f"🚨 DMU sayınız ({kontrol['n_dmu']}), literatürdeki asgari kuralın bile "
+                f"(n ≥ 2×(girdi+çıktı) = {kontrol['onerilen_gevsek']}) altında kalıyor "
+                f"({kontrol['n_girdi']} girdi, {kontrol['n_cikti']} çıktı için). Bu durumda DEA'nın "
+                f"ayrım gücü ciddi şekilde zayıflar; çoğu DMU yapay olarak 'etkin' çıkabilir. Girdi/çıktı "
+                f"sayısını azaltmayı ya da (mümkünse) DMU sayısını artırmayı değerlendirin."
+            )
+
         tum_secenekler = veri_onizleme["girdi_cols"] + veri_onizleme["cikti_cols"]
         bagimsizlar = st.multiselect(
             "Panel regresyonunda bagimsiz degisken olarak kullanilacak sutunlar",
@@ -96,11 +144,32 @@ if uploaded is not None:
 
 if "sonuc" in st.session_state:
     sonuc = st.session_state["sonuc"]
+    girdi_cols = sonuc["veri"]["girdi_cols"]
+    cikti_cols = sonuc["veri"]["cikti_cols"]
+
     tab_dea, tab_malmquist, tab_panel = st.tabs(["DEA Sonuclari", "Malmquist Sonuclari", "Panel Analizi"])
 
     with tab_dea:
         donem_sec = st.selectbox("Donem sec", options=sonuc["veri"]["donem_sirali"], key="dea_donem")
         dea_d = sonuc["dea"][donem_sec]
+        n_dmu_donem = len(sonuc["veri"]["dmu_sirali"])
+
+        # --- Minimum DMU sayisi kontrolu (secilen donem baglaminda tekrar goster) ---
+        kontrol = min_dmu_kontrolu(len(girdi_cols), len(cikti_cols), n_dmu_donem)
+        if kontrol["seviye"] == "yeterli":
+            st.caption(
+                f"✅ DMU sayısı ({kontrol['n_dmu']}) literatür eşiğini (n ≥ {kontrol['onerilen_siki']}) karşılıyor."
+            )
+        elif kontrol["seviye"] == "asgari":
+            st.caption(
+                f"⚠️ DMU sayısı ({kontrol['n_dmu']}) sadece asgari kuralı (n ≥ {kontrol['onerilen_gevsek']}) "
+                f"karşılıyor, siki kurali (n ≥ {kontrol['onerilen_siki']}) karsilamiyor -- ayrim gucu sinirli olabilir."
+            )
+        else:
+            st.caption(
+                f"🚨 DMU sayısı ({kontrol['n_dmu']}) asgari kuralin (n ≥ {kontrol['onerilen_gevsek']}) altinda."
+            )
+
         c1, c2 = st.columns(2)
         with c1:
             st.write("**CCR (theta)**")
@@ -126,14 +195,26 @@ if "sonuc" in st.session_state:
             st.dataframe(dea_d["slack_y_bcc"].round(4), width='stretch')
 
         st.write("---")
-        st.write("**Referans (Peer) Agirliklari - Lambda**")
-        c5, c6 = st.columns(2)
-        with c5:
-            st.write("*CCR lambda (satir=peer, sutun=degerlendirilen DMU)*")
-            st.dataframe(dea_d["lambda_ccr"].round(4), width='stretch')
-        with c6:
-            st.write("*BCC lambda (satir=peer, sutun=degerlendirilen DMU)*")
-            st.dataframe(dea_d["lambda_bcc"].round(4), width='stretch')
+        st.markdown("### 📋 Yorum: Etkin Olmayan DMU'lar Nasıl Etkin Hale Gelir?")
+        vrs_secim = st.radio(
+            "Hangi model uzerinden yorumlansin?", ["CCR", "BCC"],
+            horizontal=True, key="dea_yorum_model",
+        )
+        vrs = (vrs_secim == "BCC")
+
+        X_donem = sonuc["X"][donem_sec]
+        Y_donem = sonuc["Y"][donem_sec]
+        aksiyon_tablosu = dea_aksiyon_tablosu(dea_d, X_donem, Y_donem, vrs=vrs)
+        st.dataframe(aksiyon_tablosu, width='stretch')
+
+        etkin_olmayanlar = aksiyon_tablosu[~aksiyon_tablosu["etkin_mi"]]
+        if etkin_olmayanlar.empty:
+            st.success(f"Bu donemde ({vrs_secim} modeline gore) tum DMU'lar etkin (theta=1.00).")
+        else:
+            dmu_sec = st.selectbox(
+                "Etkin olmayan bir DMU secin", options=list(etkin_olmayanlar.index), key="dea_yorum_dmu",
+            )
+            st.markdown(dea_aksiyon_metni(aksiyon_tablosu.loc[dmu_sec], girdi_cols, cikti_cols))
 
         dea_csv_buf = io.StringIO()
         pd.concat({
@@ -146,6 +227,16 @@ if "sonuc" in st.session_state:
     with tab_malmquist:
         st.write("**EC / TC / M degerleri (ardisik donem gecisleri)**")
         st.dataframe(sonuc["malmquist"].round(4), width='stretch')
+
+        st.write("---")
+        st.write("**Donem Bazinda Ortalama EC / TC / M (tum DMU'lar uzerinden, geometrik ortalama)**")
+        gecisli_donemler = sonuc["veri"]["donem_sirali"][:-1]
+        donem_ort = malmquist_donem_ortalamasi(sonuc["malmquist"], donem_sirasi=gecisli_donemler)
+        st.dataframe(donem_ort, width='stretch')
+        st.caption(
+            "Not: Ortalama, geometrik ortalama olarak hesaplanmistir -- EC/TC/M birer indeks (oran) "
+            "oldugu icin bu, Malmquist literaturunde standart pratiktir (aritmetik ortalama yanıltıcı olabilir)."
+        )
 
         st.write("---")
         st.markdown("### 📈 Yorum")
@@ -223,6 +314,29 @@ if "sonuc" in st.session_state:
         st.markdown(f"### ⭐ NIHAI SONUC: {nihai_baslik}")
         st.dataframe(reg_meta_table(nihai_res), width='stretch', hide_index=True)
         st.dataframe(reg_params_table(nihai_res), width='stretch')
+        st.write("---")
+
+        # --- Katsayilarin verimlilige (MI) etkisi -- yon ve buyukluk gosterimi ---
+        st.markdown("### 🎯 Katsayıların Verimliliğe (MI) Etkisi — Yön ve Büyüklük")
+        st.caption(
+            "Nihai (yukaridaki '⭐ NIHAI SONUC') modeldeki her degiskenin, ortalama degerinin %10 "
+            "degismesi durumunda MI uzerindeki tahmini etkisi. Yesil = pozitif (verimlilik artisi), "
+            "kirmizi = negatif (verimlilik azalisi). Yon ayrica DEA'nin teorik beklentisiyle "
+            "(Girdi -> negatif, Cikti -> pozitif) karsilastirilir; celisen anlamli katsayilar asagida "
+            "ayrica isaretlenir."
+        )
+        analiz_df = panel_aksiyon_analizi(nihai_res, girdi_cols, cikti_cols, sonuc["panel_df"])
+        st.dataframe(
+            analiz_df.style.apply(_katsayi_renklendir, axis=1),
+            width='stretch', hide_index=True,
+        )
+
+        anlamli_grafik = analiz_df[analiz_df["anlamli_mi"]].set_index("degisken")["mi_etkisi_yuzde10"]
+        if not anlamli_grafik.empty:
+            st.write("*Anlamli (p<0.05) degiskenlerin %10'luk degisim etkisi -- gorsel yon:*")
+            st.bar_chart(anlamli_grafik)
+
+        st.markdown(panel_aksiyon_metni(analiz_df))
         st.write("---")
 
         st.write("**Alternatif SE tipleriyle karsilastirma (bilgi amacli):**")
