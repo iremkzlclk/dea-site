@@ -318,14 +318,17 @@ if "sonuc" in st.session_state:
 
         # --- Katsayilarin verimlilige (MI) etkisi -- yon ve buyukluk gosterimi ---
         st.markdown("### 🎯 Katsayıların Verimliliğe (MI) Etkisi — Yön ve Büyüklük")
+        KATSAYI_ALPHA = 0.10  # katsayi anlamliligi icin ayri esik -- model secimi testlerinden (p['alpha']) bagimsiz
         st.caption(
-            "Nihai (yukaridaki '⭐ NIHAI SONUC') modeldeki her degiskenin, ortalama degerinin %10 "
-            "degismesi durumunda MI uzerindeki tahmini etkisi. Yesil = pozitif (verimlilik artisi), "
-            "kirmizi = negatif (verimlilik azalisi). Yon ayrica DEA'nin teorik beklentisiyle "
-            "(Girdi -> negatif, Cikti -> pozitif) karsilastirilir; celisen anlamli katsayilar asagida "
-            "ayrica isaretlenir."
+            f"Nihai (yukaridaki '⭐ NIHAI SONUC') modeldeki her degiskenin, ortalama degerinin %10 "
+            f"degismesi durumunda MI uzerindeki tahmini etkisi. Anlamlilik esigi: p<{KATSAYI_ALPHA:.2f}. "
+            f"Yesil = pozitif (verimlilik artisi), kirmizi = negatif (verimlilik azalisi). Yon ayrica "
+            f"DEA'nin teorik beklentisiyle (Girdi -> negatif, Cikti -> pozitif) karsilastirilir; celisen "
+            f"anlamli katsayilar asagida ayrica isaretlenir."
         )
-        analiz_df = panel_aksiyon_analizi(nihai_res, girdi_cols, cikti_cols, sonuc["panel_df"])
+        analiz_df = panel_aksiyon_analizi(
+            nihai_res, girdi_cols, cikti_cols, sonuc["panel_df"], alpha=KATSAYI_ALPHA,
+        )
         st.dataframe(
             analiz_df.style.apply(_katsayi_renklendir, axis=1),
             width='stretch', hide_index=True,
@@ -333,7 +336,7 @@ if "sonuc" in st.session_state:
 
         anlamli_grafik = analiz_df[analiz_df["anlamli_mi"]].set_index("degisken")["mi_etkisi_yuzde10"]
         if not anlamli_grafik.empty:
-            st.write("*Anlamli (p<0.10) degiskenlerin %10'luk degisim etkisi -- gorsel yon:*")
+            st.write(f"*Anlamli (p<{KATSAYI_ALPHA:.2f}) degiskenlerin %10'luk degisim etkisi -- gorsel yon:*")
             st.bar_chart(anlamli_grafik)
 
         st.markdown(panel_aksiyon_metni(analiz_df))

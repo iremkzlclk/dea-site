@@ -14,6 +14,12 @@ from statsmodels.tools.tools import add_constant
 from linearmodels.panel import PooledOLS, PanelOLS, RandomEffects, compare
 from scipy import stats as sstats
 
+# Panel analizindeki model secimi karar noktalarinda (Poolability F-testi, Breusch-Pagan
+# LM testi, Hausman testi) kullanilan ortak anlamlilik esigi. NOT: bu esik, katsayi
+# anlamliligi (panel_aksiyon_analizi, yorumlama.py) icin AYRI ve %10'dur -- ikisi
+# kasitli olarak farkli tutulmustur (model secimi daha sıkı, katsayi yorumu daha esnek).
+ALPHA = 0.05
+
 
 def hausman_test(fe_res, re_res):
     ortak = [v for v in fe_res.params.index if v in re_res.params.index]
@@ -60,7 +66,8 @@ def breusch_pagan_lm_test(pooled_res, panel_data):
     return {"stat": float(lm_stat), "pval": float(p_value), "N": int(N), "T": int(T)}
 
 
-def nihai_oneri_belirle(poolability: dict, bp_lm: dict, hausman: dict, secilen_model: str, n_entities: int):
+def nihai_oneri_belirle(poolability: dict, bp_lm: dict, hausman: dict, secilen_model: str,
+                         n_entities: int, alpha: float = ALPHA):
     """
     Literatur sirasina gore (Baltagi, Wooldridge) nihai model/SE onerisini belirler:
       1) Iki tamamlayici birim-etki testi:
@@ -75,28 +82,32 @@ def nihai_oneri_belirle(poolability: dict, bp_lm: dict, hausman: dict, secilen_m
          2015; Cameron, Gelbach & Miller, 2008) guvenilirligi dusuktur -- bu durumda
          robust (kumeleme yapmayan) SE ile birlikte raporlanmasi ve temkinli yorumlanmasi
          onerilir. Bu, secilen model Pooled OLS de olsa FE/RE de olsa aynen gecerlidir.
+
+    alpha: karar noktalarinda kullanilan anlamlilik esigi (varsayilan: modul-seviyesi ALPHA).
     Returns: dict -- asama1, asama2, se_onerisi, sonuc_tablo (hangi tabloyu vurgula),
                      sonuc_basligi, uyarilar (liste)
     """
     uyarilar = []
+    alpha_yuzde = f"{alpha:.2f}"
+    sinir_ust = alpha + 0.05  # "sinirda" bolgesinin ust siniri (raporlama amacli)
 
     # ASAMA 1: Pooled OLS yeterli mi? -- iki tamamlayici test birlikte
     pool_pval = poolability.get("pval")
     lm_pval = bp_lm.get("pval") if bp_lm else None
 
-    f_reddedildi = pool_pval is not None and pool_pval < 0.05
-    lm_reddedildi = lm_pval is not None and lm_pval < 0.05
+    f_reddedildi = pool_pval is not None and pool_pval < alpha
+    lm_reddedildi = lm_pval is not None and lm_pval < alpha
     panel_gerekli = f_reddedildi or lm_reddedildi
 
     test_ozetleri = []
     if pool_pval is not None:
         test_ozetleri.append(f"Poolability F-testi (Pooled vs FE): p={pool_pval:.4f} "
-                              f"({'H0 reddedildi' if f_reddedildi else 'H0 reddedilemedi'})")
+                              f"({'H0 reddedildi' if f_reddedildi else 'H0 reddedilemedi'}, alpha={alpha_yuzde})")
     else:
         test_ozetleri.append("Poolability F-testi hesaplanamadi")
     if lm_pval is not None:
         test_ozetleri.append(f"Breusch-Pagan LM testi (Pooled vs RE): p={lm_pval:.4f} "
-                              f"({'H0 reddedildi' if lm_reddedildi else 'H0 reddedilemedi'})")
+                              f"({'H0 reddedildi' if lm_reddedildi else 'H0 reddedilemedi'}, alpha={alpha_yuzde})")
     else:
         test_ozetleri.append("Breusch-Pagan LM testi hesaplanamadi (muhtemelen dengesiz panel)")
 
@@ -117,13 +128,13 @@ def nihai_oneri_belirle(poolability: dict, bp_lm: dict, hausman: dict, secilen_m
         )
     else:
         # her iki test de H0'i reddedemedi -- ama sinir durumu kontrolu (F-test uzerinden)
-        if pool_pval is not None and pool_pval < 0.10:
+        if pool_pval is not None and pool_pval < sinir_ust:
             asama1 = (f"{'; '.join(test_ozetleri)}. Her iki test de teknik olarak Pooled OLS'in "
-                      f"yeterli oldugunu gosteriyor, ANCAK Poolability p-degeri alpha=0.10 sinirinda -- "
-                      f"DMU'lara ozgu gizli bir fark ihtimali gozardi edilmemeli.")
+                      f"yeterli oldugunu gosteriyor, ANCAK Poolability p-degeri alpha={sinir_ust:.2f} "
+                      f"sinirinda -- DMU'lara ozgu gizli bir fark ihtimali gozardi edilmemeli.")
             uyarilar.append(
-                f"Poolability p-degeri ({pool_pval:.4f}) alpha=0.05 ile alpha=0.10 arasinda sinirda "
-                f"kaliyor. Raporunuzda bu sinir durumu belirtilmelidir."
+                f"Poolability p-degeri ({pool_pval:.4f}) alpha={alpha_yuzde} ile alpha={sinir_ust:.2f} arasinda "
+                f"sinirda kaliyor. Raporunuzda bu sinir durumu belirtilmelidir."
             )
         else:
             asama1 = (f"{'; '.join(test_ozetleri)}. Her iki test de DMU'lara ozgu anlamli bir etki "
@@ -150,8 +161,8 @@ def nihai_oneri_belirle(poolability: dict, bp_lm: dict, hausman: dict, secilen_m
     elif not panel_gerekli:
         asama2 = "Poolability testi Pooled OLS'in yeterli oldugunu gosterdigi icin bu adim ikincil onemde."
     else:
-        asama2 = (f"Hausman testi (chi2={h_stat:.4f}, p={h_pval:.4f}) -> "
-                  f"{'H0 reddedildi, FE tutarli' if h_pval < 0.05 else 'H0 reddedilemedi, RE tercih edilebilir (daha etkin)'}.")
+        asama2 = (f"Hausman testi (chi2={h_stat:.4f}, p={h_pval:.4f}, alpha={alpha_yuzde}) -> "
+                  f"{'H0 reddedildi, FE tutarli' if h_pval < alpha else 'H0 reddedilemedi, RE tercih edilebilir (daha etkin)'}.")
 
     # ASAMA 3: SE tipi -- kume (DMU) sayisi yeterli mi?
     KUME_ESIGI = 30
@@ -191,12 +202,15 @@ def nihai_oneri_belirle(poolability: dict, bp_lm: dict, hausman: dict, secilen_m
         "sonuc_tablo": sonuc_tablo,
         "sonuc_basligi": sonuc_basligi,
         "uyarilar": uyarilar,
+        "alpha": alpha,
     }
 
 
-def run_panel_analysis(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list):
+def run_panel_analysis(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list, alpha: float = ALPHA):
     """
     panel_df: index=['entity','time'], sutunlarda bagimli + bagimsizlar bulunmali
+    alpha: TUM karar noktalarinda (Poolability, BP-LM, Hausman, katsayi anlamliligi)
+           kullanilan ortak anlamlilik esigi (varsayilan: modul-seviyesi ALPHA).
     Returns: dict -- corr, vif, pooled, fe, re, poolability, hausman,
                      secilen_model, robust, clustered, comparison, n_entities, oneri
     """
@@ -223,7 +237,7 @@ def run_panel_analysis(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list):
     try:
         f_pool = res_fe.f_pooled
         poolability = {"stat": f_pool.stat, "pval": f_pool.pval,
-                        "sonuc": "FE tercih edilmelidir" if f_pool.pval < 0.05 else "Pooled OLS yeterlidir"}
+                        "sonuc": "FE tercih edilmelidir" if f_pool.pval < alpha else "Pooled OLS yeterlidir"}
     except Exception as e:
         poolability = {"hata": str(e)}
 
@@ -233,7 +247,7 @@ def run_panel_analysis(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list):
         bp_lm = {"hata": str(e)}
 
     h_stat, h_dof, h_pval = hausman_test(res_fe, res_re)
-    secilen_model = "FE" if h_pval < 0.05 else "RE"
+    secilen_model = "FE" if h_pval < alpha else "RE"
     hausman = {"stat": h_stat, "dof": h_dof, "pval": h_pval}
 
     res_fe_robust = PanelOLS(y, X, entity_effects=True, drop_absorbed=True).fit(cov_type="robust")
@@ -248,7 +262,7 @@ def run_panel_analysis(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list):
 
     comparison = compare({"Pooled OLS": res_pooled, "FE": res_fe, "RE": res_re})
 
-    oneri = nihai_oneri_belirle(poolability, bp_lm, hausman, secilen_model, n_entities)
+    oneri = nihai_oneri_belirle(poolability, bp_lm, hausman, secilen_model, n_entities, alpha=alpha)
 
     return {
         "corr": corr,
@@ -268,4 +282,5 @@ def run_panel_analysis(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list):
         "comparison": comparison,
         "n_entities": n_entities,
         "oneri": oneri,
+        "alpha": alpha,
     }
