@@ -11,7 +11,7 @@ from excel_okuma import excel_oku, donemlere_ayir, VeriDogrulamaHatasi
 from dea_module import min_dmu_kontrolu
 from panel_module import leave_one_out_kararlilik
 from pipeline import run_pipeline
-from senaryo_module import gelecek_donem_analizi
+from senaryo_module import girdi_yon_bilgisi, gelecek_donem_analizi_manuel
 from backtest_module import backtest_calistir, rolling_backtest_calistir
 from yorumlama import (
     malmquist_yorum_metni,
@@ -171,7 +171,7 @@ if uploaded is not None:
             # DMU/donem setine sahip yeni bir dosya yuklendiginde, eski sonuclar (gelecek
             # senaryosu, backtest, kararlilik testi) yeni DMU/degisken listesiyle uyusmayip
             # KeyError'a yol acabilir (secim kutulari yeni veriden, sonuc eskisinden gelir).
-            for eski_anahtar in ["gelecek", "backtest", "rolling_backtest", "kararlilik"]:
+            for eski_anahtar in ["gelecek_manuel", "backtest", "rolling_backtest", "kararlilik"]:
                 st.session_state.pop(eski_anahtar, None)
 
     except VeriDogrulamaHatasi as e:
@@ -566,130 +566,124 @@ if "sonuc" in st.session_state:
     with tab_gelecek:
         st.markdown("### 🔮 Gelecek Dönem Verimlilik Tahmini")
         st.markdown("""
-        Bu bolum, panel analizindeki **nihai model** katsayilarini kullanarak, **sadece
-        son donemin verilerini** temel alan bir "bir sonraki donem" senaryosu uretir.
-        Izlenen yontem (**ceteris paribus** -- sadece kanit oldugu degiskenler degisir,
-        gerisi sabit tutulur):
+        Bu bölüm, panel analizindeki **nihai model** katsayılarını kullanarak, **sadece
+        son dönemin verilerini** temel alan bir "bir sonraki dönem" senaryosu üretir.
 
-        1. **Karar degiskeni ayrimi → Hedefli / Dogal:** SADECE GIRDI degiskenleri
-           "Hedefli" olabilir -- cunku donem basinda karar verebileceginiz sey
-           girdidir (orn. simulasyon suresi, maliyet), cikti (dogruluk, azaltilan
-           prototip sayisi) donem SONUNDA gozlemlenen bir sonuctur, onceden karar
-           verilemez. Girdi, panel modelinde ANLAMLIYSA (p<0.10) Hedefli sayilir --
-           DEA teorisiyle (girdi→negatif katsayi beklentisi) TUTARLI olmasi
-           ARANMAZ; yon dogrudan katsayinin GERCEK isaretinden alinir. Teoriyle
-           celisen durumlar yine de ⚠️ isaretlenir (seffaflik icin), ama Hedefli
-           olmaktan alikonmaz.
-        2. **Hedefli degiskenler:** katsayinin GERCEK isaretine gore (artir/azalt),
-           son donem degerinin %5 / %10 / %15'i kadar degistirilir; bu hareketin
-           MI uzerindeki tahmini etkisi de (katsayi x degisim) ayrica raporlanir.
-        3. **Digerleri (Dogal -- tum cikti degiskenleri + anlamsiz girdiler):**
-           ceteris paribus -- son donem degeriyle AYNEN birakilir, hicbir sekilde
-           degistirilmez. VIF≥5 olanlar icin (hedefli degiskenlerle yuksek
-           korelasyon) sadece bilgi amacli bir uyari eklenir.
-        4. **Sinir kontrolleri:** Hedefli degiskenlerin projeksiyonu, DMU'nun kendi
-           tarihsel araligina gore makul bir bant disina cikamaz; negatif deger
-           asla uretilmez.
-        5. **Duyarlilik taramasi:** %5 / %10 (Baz) / %15 uc senaryo birlikte uretilir;
-           Baz senaryo nihai sonuc olarak one cikarilir.
+        **Nasıl çalışır:** Aşağıda her **girdi** değişkeni için panel modelinin bulduğu
+        katsayı ve **önerdiği yön** (bilgi amaçlı) gösterilir. Ama karar tamamen **size**
+        ait — her girdi için **kendi yönünüzü** (Artır/Azalt) ve **kendi yüzdenizi**
+        seçersiniz. **Çıktı değişkenleri** (doğruluk, prototip sayısı vb.) hiçbir zaman
+        değiştirilmez — çünkü bunlar dönem başında karar verilebilecek değil, dönem
+        sonunda gözlemlenen sonuçlardır.
         """)
 
-        if st.button("Gelecek Donem Senaryosunu Hesapla", type="primary", key="gelecek_hesapla"):
-            with st.spinner("3 senaryo icin son donem verisi olusturuluyor, DEA ve Malmquist tekrar cozuluyor..."):
-                st.session_state["gelecek"] = gelecek_donem_analizi(sonuc)
+        girdi_cols = sonuc["veri"]["girdi_cols"]
+        cikti_cols = sonuc["veri"]["cikti_cols"]
 
-        if "gelecek" in st.session_state:
-            gelecek = st.session_state["gelecek"]
+        p_gelecek = sonuc["panel_sonuc"]
+        oneri_gelecek = p_gelecek["oneri"]
+        tablo_map_gelecek = {
+            "pooled_robust": p_gelecek["pooled_robust"], "pooled_clustered": p_gelecek["pooled_clustered"],
+            "fe_robust": p_gelecek["fe_robust"], "fe_clustered": p_gelecek["fe_clustered"],
+            "re_robust": p_gelecek["re_robust"], "re_clustered": p_gelecek["re_clustered"],
+        }
+        nihai_res_gelecek = tablo_map_gelecek[oneri_gelecek["sonuc_tablo"]]
+        girdi_bilgisi = girdi_yon_bilgisi(nihai_res_gelecek, girdi_cols)
 
-            st.write("---")
-            st.markdown("#### 1-2) Hedefli / Dogal Siniflandirma")
-            st.caption(
-                f"Nihai model: **{gelecek['nihai_res_baslik']}**. Son gercek donem: **{gelecek['son_donem']}** "
-                f"(senaryo bu donemin verisini baz alir)."
-            )
-            st.dataframe(
-                gelecek["siniflandirma"].reset_index(),
-                width='stretch', hide_index=True,
-            )
+        st.caption(f"Nihai model: **{oneri_gelecek['sonuc_basligi']}** — bu modelin katsayılarına göre öneriler aşağıda gösteriliyor.")
 
-            hedefli_sayi = (gelecek["siniflandirma"]["siniflandirma"] == "Hedefli").sum()
-            if hedefli_sayi == 0:
-                st.info(
-                    "Bu modelde 'Hedefli' (anlamli bir GIRDI) degisken bulunamadi -- cikti "
-                    "degiskenleri zaten hicbir zaman Hedefli olamiyor, ve hicbir girdi de panelde "
-                    "anlamli cikmadi. Tum degiskenler ceteris paribus sabit kaliyor (%5/%10/%15 "
-                    "senaryolari bu nedenle birbirinin ayni cikacaktir)."
-                )
+        st.markdown("#### Her girdi için yön ve yüzde seçin")
+        girdi_secimleri = {}
+        for g in girdi_cols:
+            with st.container(border=True):
+                st.write(f"**{g}**")
+                if g in girdi_bilgisi.index:
+                    satir_bilgi = girdi_bilgisi.loc[g]
+                    onerilen_metin = "Artır" if satir_bilgi["onerilen_yon"] > 0 else "Azalt"
+                    anlamli_metin = "anlamlı" if satir_bilgi["anlamli_mi"] else "anlamsız"
+                    st.caption(
+                        f"Panel katsayısı: **{satir_bilgi['katsayi']}**, p-değeri: **{satir_bilgi['p_degeri']}** "
+                        f"({anlamli_metin}) — panelin önerdiği yön: **{onerilen_metin}** "
+                        f"(bilgi amaçlıdır, kararı siz verirsiniz)."
+                    )
+                    varsayilan_index = 0 if satir_bilgi["onerilen_yon"] > 0 else 1
+                else:
+                    st.caption("Bu girdi için panel modelinde bir katsayı bulunamadı.")
+                    varsayilan_index = 0
 
-            st.write("---")
-            st.markdown("#### 5) Senaryo Karsilastirma (Duyarlilik Taramasi)")
-            karsilastirma_satirlar = []
-            for isim, s in gelecek["senaryolar"].items():
-                karsilastirma_satirlar.append({
-                    "Senaryo": isim, "Yuzde": f"%{s['yuzde']*100:g}",
-                    "Ortalama EC": round(s["malmquist"]["EC"].mean(), 4),
-                    "Ortalama TC": round(s["malmquist"]["TC"].mean(), 4),
-                    "Ortalama M": round(s["malmquist"]["M"].mean(), 4),
-                })
-            karsilastirma_df = pd.DataFrame(karsilastirma_satirlar).set_index("Senaryo")
-            st.dataframe(karsilastirma_df, width='stretch')
-            st.bar_chart(karsilastirma_df["Ortalama M"])
+                c1, c2 = st.columns([1, 1])
+                with c1:
+                    yon_secim = st.radio(
+                        "Yön", ["Artır", "Azalt"], index=varsayilan_index,
+                        key=f"gelecek_yon_{g}", horizontal=True,
+                    )
+                with c2:
+                    yuzde_secim = st.number_input(
+                        "Yüzde (%)", min_value=0.0, max_value=200.0, value=10.0, step=1.0,
+                        key=f"gelecek_yuzde_{g}",
+                    )
+                girdi_secimleri[g] = {"yon": 1 if yon_secim == "Artır" else -1, "yuzde": yuzde_secim / 100.0}
 
-            st.write("---")
-            senaryo_sec = st.selectbox(
-                "Detayli incelemek icin senaryo secin", options=list(gelecek["senaryolar"].keys()),
-                index=1, key="gelecek_senaryo_sec",  # varsayilan: Baz
-            )
-            s = gelecek["senaryolar"][senaryo_sec]
+        if st.button("Senaryoyu Hesapla", type="primary", key="manuel_senaryo_hesapla"):
+            with st.spinner("Seçtiğiniz yön/yüzdelerle son dönem verisi oluşturuluyor, DEA ve Malmquist çözülüyor..."):
+                st.session_state["gelecek_manuel"] = gelecek_donem_analizi_manuel(sonuc, girdi_secimleri)
 
-            st.markdown(f"#### Senaryo Detayi: {senaryo_sec} (hedefli degisim yuzdesi=%{s['yuzde']*100:g})")
-            dmu_sec_gelecek = st.selectbox(
-                "DMU sec (senaryo detay tablosu icin)", options=sonuc["veri"]["dmu_sirali"],
-                key="gelecek_dmu_sec",
-            )
-            detay_dmu_listesi = s["detay"].index.get_level_values("DMU").unique()
-            if dmu_sec_gelecek not in detay_dmu_listesi:
+        if "gelecek_manuel" in st.session_state:
+            gelecek = st.session_state["gelecek_manuel"]
+
+            detay_dmu_listesi = gelecek["detay"].index.get_level_values("DMU").unique()
+            if not set(sonuc["veri"]["dmu_sirali"]).issubset(set(detay_dmu_listesi)):
                 st.warning(
-                    "Bu senaryo sonucu farkli bir veri setine ait gorunuyor (DMU eslesmiyor). "
-                    "Lutfen 'Gelecek Donem Senaryosunu Hesapla' butonuna tekrar basin."
+                    "Bu sonuç farklı bir veri setine ait görünüyor (DMU eşleşmiyor). "
+                    "Lütfen 'Senaryoyu Hesapla' butonuna tekrar basın."
                 )
             else:
-                st.dataframe(s["detay"].loc[dmu_sec_gelecek], width='stretch')
+                st.write("---")
+                st.markdown("#### Senaryo Detayı")
+                dmu_sec_gelecek = st.selectbox(
+                    "DMU seç (senaryo detay tablosu için)", options=sonuc["veri"]["dmu_sirali"],
+                    key="gelecek_dmu_sec",
+                )
+                st.dataframe(gelecek["detay"].loc[dmu_sec_gelecek], width='stretch')
 
-            st.write("---")
-            st.markdown("#### Projeksiyon Donemi DEA Sonuclari")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.write("**CCR (theta)**")
-                st.dataframe(s["dea"]["theta_ccr"].round(4), width='stretch')
-            with c2:
-                st.write("**BCC (theta)**")
-                st.dataframe(s["dea"]["theta_bcc"].round(4), width='stretch')
-            st.write("**Olcek Etkinligi**")
-            st.dataframe(s["dea"]["olcek_etkinligi"].round(4), width='stretch')
+                st.write("---")
+                st.markdown("#### Projeksiyon Dönemi DEA Sonuçları")
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.write("**CCR (theta)**")
+                    st.dataframe(gelecek["dea"]["theta_ccr"].round(4), width='stretch')
+                with c2:
+                    st.write("**BCC (theta)**")
+                    st.dataframe(gelecek["dea"]["theta_bcc"].round(4), width='stretch')
+                st.write("**Ölçek Etkinliği**")
+                st.dataframe(gelecek["dea"]["olcek_etkinligi"].round(4), width='stretch')
 
-            st.write("---")
-            st.markdown(f"#### Malmquist: {gelecek['son_donem']} → Projeksiyon Donemi")
-            st.dataframe(s["malmquist"].round(4), width='stretch')
+                st.write("---")
+                st.markdown(f"#### Malmquist: {gelecek['son_donem']} → Projeksiyon Dönemi")
+                st.dataframe(gelecek["malmquist"].round(4), width='stretch')
+                st.caption(
+                    f"Ortalama EC: {gelecek['malmquist']['EC'].mean():.4f} — "
+                    f"Ortalama TC: {gelecek['malmquist']['TC'].mean():.4f} — "
+                    f"Ortalama M: {gelecek['malmquist']['M'].mean():.4f}"
+                )
 
-            st.markdown("##### Yorum")
-            malmquist_yorum_sec = st.selectbox(
-                "Yorumlanacak DMU", options=list(s["malmquist"].index.get_level_values("DMU")),
-                key="gelecek_malmquist_yorum_dmu",
-            )
-            satir = s["malmquist"].xs(malmquist_yorum_sec, level="DMU").iloc[0]
-            st.markdown(malmquist_yorum_metni(satir))
+                st.markdown("##### Yorum")
+                malmquist_yorum_sec = st.selectbox(
+                    "Yorumlanacak DMU", options=list(gelecek["malmquist"].index.get_level_values("DMU")),
+                    key="gelecek_malmquist_yorum_dmu",
+                )
+                satir_yorum = gelecek["malmquist"].xs(malmquist_yorum_sec, level="DMU").iloc[0]
+                st.markdown(malmquist_yorum_metni(satir_yorum))
 
-            st.caption(
-                "⚠️ Bu tahmin, gecmis trend ve panel model katsayilarina dayanan bir SENARYO'dur, "
-                "kesin bir ongoru degildir. Ozellikle DMU sayisi az oldugunda ve/veya panelde anlamli "
-                "'Hedefli' degisken bulunamadigi durumlarda temkinli yorumlanmalidir."
-            )
+                st.caption(
+                    "⚠️ Bu tahmin, sizin seçtiğiniz yön/yüzde varsayımlarına dayanan bir SENARYO'dur, "
+                    "kesin bir öngörü değildir."
+                )
 
-            st.download_button(
-                f"{senaryo_sec} senaryo detay tablosunu Excel indir", excel_indirme_verisi(s["detay"]),
-                file_name=f"gelecek_senaryo_{senaryo_sec.lower()}.xlsx", mime=EXCEL_MIME, key="gelecek_csv_dl",
-            )
+                st.download_button(
+                    "Senaryo detay tablosunu Excel indir", excel_indirme_verisi(gelecek["detay"]),
+                    file_name="gelecek_senaryo_manuel.xlsx", mime=EXCEL_MIME, key="gelecek_csv_dl",
+                )
 
     with tab_backtest:
         st.markdown("### 🎯 Backtest — Panel Modelinin Gercek Tahmin Gucu")
