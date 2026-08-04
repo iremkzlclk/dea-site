@@ -12,7 +12,7 @@ from dea_module import min_dmu_kontrolu
 from panel_module import leave_one_out_kararlilik
 from pipeline import run_pipeline
 from senaryo_module import gelecek_donem_analizi
-from backtest_module import backtest_calistir
+from backtest_module import backtest_calistir, rolling_backtest_calistir
 from yorumlama import (
     malmquist_yorum_metni,
     malmquist_donem_ortalamasi,
@@ -171,7 +171,7 @@ if uploaded is not None:
             # DMU/donem setine sahip yeni bir dosya yuklendiginde, eski sonuclar (gelecek
             # senaryosu, backtest, kararlilik testi) yeni DMU/degisken listesiyle uyusmayip
             # KeyError'a yol acabilir (secim kutulari yeni veriden, sonuc eskisinden gelir).
-            for eski_anahtar in ["gelecek", "backtest", "kararlilik"]:
+            for eski_anahtar in ["gelecek", "backtest", "rolling_backtest", "kararlilik"]:
                 st.session_state.pop(eski_anahtar, None)
 
     except VeriDogrulamaHatasi as e:
@@ -729,14 +729,54 @@ if "sonuc" in st.session_state:
                 )
 
                 m = bt["metrikler"]
+                st.markdown(
+                    "**Bu sayılar ne anlama geliyor?** Modelinizin, geçmişte zaten bildiğiniz "
+                    "bir dönemi (yukarıda belirtilen test dönemini) ne kadar isabetli tahmin "
+                    "ettiğini ölçüyoruz. \"MI\" verimlilik endeksinizdir (1.0 = değişim yok, "
+                    "1.10 = %10 artış, 0.90 = %10 azalış gibi düşünülebilir)."
+                )
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("MAE", m["MAE"])
-                c2.metric("RMSE", m["RMSE"])
-                c3.metric("MAPE (%)", m["MAPE_%"])
-                c4.metric("Yon Dogruluk (%)", m["yon_dogruluk_%"])
+                c1.metric(
+                    "Ortalama hata (MAE)", m["MAE"],
+                    help=(
+                        "Tahminin gerçek değerden ORTALAMA ne kadar saptığı. Örnek: MAE=0.10 "
+                        "ise tahminleriniz gerçek MI'den ortalama 0.10 birim (kabaca %10 puan "
+                        "gibi düşünebilirsiniz) uzak çıkıyor demektir. Ne kadar düşükse o kadar iyi."
+                    ),
+                )
+                c2.metric(
+                    "Büyük hata cezası (RMSE)", m["RMSE"],
+                    help=(
+                        "MAE'ye benzer, ama büyük sapmaları daha ağır cezalandırır. RMSE, MAE'den "
+                        "belirgin şekilde büyükse, bazı tahminlerde tek tük büyük kaçışlar var demektir "
+                        "(çoğu tahmin iyi ama birkaçı ciddi yanlış)."
+                    ),
+                )
+                c3.metric(
+                    "Yüzdesel hata (MAPE)", f"%{m['MAPE_%']}",
+                    help=(
+                        "Hatayı yüzde olarak ifade eder. Örnek: MAPE=%14 ise tahminleriniz "
+                        "ortalama olarak gerçek degerin %14'u kadar sapiyor demektir. Yuzde "
+                        "oldugu icin yorumlamasi en kolay olan olcuttur."
+                    ),
+                )
+                c4.metric(
+                    "Yön doğruluğu", f"%{m['yon_dogruluk_%']}",
+                    help=(
+                        "Modelin, verimliligin ARTACAGINI mi AZALACAGINI mi dogru tahmin ettigi "
+                        "DMU'larin orani. %50 = yazi-tura (rastgele tahminle ayni seviye); %80+ "
+                        "gibi yuksek bir oran, model buyuklugu tam tutturamasa bile YONU guvenilir "
+                        "sekilde yakaladigini gosterir -- bu, pratikte en isinize yarayacak sayidir."
+                    ),
+                )
 
                 if m["Pearson_r"] is not None:
-                    st.write(f"**Pearson korelasyonu (gercek vs tahmin):** {m['Pearson_r']}")
+                    st.caption(
+                        f"**Gerçek ile tahmin ne kadar birlikte hareket ediyor:** {m['Pearson_r']} "
+                        f"(-1 ile +1 arası bir sayı. +1'e yakınsa tahminleriniz gerçek değerlerle "
+                        f"aynı yönde ve orantılı değişiyor demektir; 0'a yakınsa aralarında bir "
+                        f"ilişki yok demektir.)"
+                    )
 
                 if m["modelin_naiften_iyi_mi"]:
                     st.success(
@@ -781,5 +821,120 @@ if "sonuc" in st.session_state:
                     "Backtest sonuclarini Excel indir", excel_indirme_verisi(bt["tahmin_df"]),
                     file_name="backtest_sonuclari.xlsx", mime=EXCEL_MIME, key="backtest_csv_dl",
                 )
+
+        st.write("---")
+        st.markdown("### 🔁 Rolling Backtest (Tum Mumkun Gecisler)")
+        st.markdown("""
+        Yukaridaki tek-katli test, SADECE SON gecisi degerlendirir -- bu, TEK BIR
+        denemeye dayandigi icin kendisi de yuksek varyansli olabilir. Bu bolum,
+        **MUMKUN OLAN HER gecisi** sirayla test icin ayirip (o ana kadarki tum
+        gecmisle egitip bir sonraki gercek gecisi tahmin ederek) sonuclarin
+        **ortalamasini ve kat-kat DAGILIMINI** gosterir.
+
+        Bu, "bu katsayilara dayanarak (orn. maliyeti X kadar azaltirsam verimlilik
+        Y kadar artar diyerek) yatirim kararı alsam, GECMISTE bu ne kadar
+        TUTARLI/HAKLI cikardim" sorusuna -- tek bir ornege degil, elinizdeki TUM
+        gecmise dayanan -- cok daha guvenilir bir cevap verir. Ham veri donem
+        sayiniz arttikca kat sayisi da artar ve bu sonuc gitgide daha anlamli
+        hale gelir (T=4 ile sadece 1 kat mumkunken, T=8 ile 5 kat elde edilir).
+
+        ⚠️ En az 4 ham veri donemi (yani en az 3 gecis donemi, 2'si egitim +
+        1'i test) gerektirir.
+        """)
+
+        if st.button("Rolling Backtest Calistir", type="primary", key="rolling_backtest_btn"):
+            with st.spinner("Mumkun olan her gecis icin model kurulup dogrulama yapiliyor (bu biraz surebilir)..."):
+                bagimsizlar_rbt = [v for v in p["pooled"].params.index if v != "const"]
+                st.session_state["rolling_backtest"] = rolling_backtest_calistir(
+                    sonuc["panel_df"], bagimsizlar_rbt,
+                )
+
+        if "rolling_backtest" in st.session_state:
+            rbt = st.session_state["rolling_backtest"]
+
+            if not rbt["yeterli_veri"]:
+                st.error(rbt["mesaj"])
+            else:
+                st.write("---")
+                st.caption(
+                    f"Basariyla tamamlanan kat sayisi: **{rbt['kat_sayisi']}** / denenen: "
+                    f"{rbt['denenen_kat_sayisi']}. Her kat, o ana kadarki tum gecmisle egitilip "
+                    f"bir sonraki GERCEK gecisi tahmin eder."
+                )
+
+                om = rbt["ortalama_metrikler"]
+                st.markdown(
+                    "**Bu sayılar ne anlama geliyor?** Aşağıdaki değerler, tek bir denemeye değil, "
+                    "yukarıda listelenen tüm katların ORTALAMASINA dayanır -- yani tek seferlik "
+                    "şans/şanssızlık yerine, modelinizin genel eğilimini gösterir."
+                )
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric(
+                    "Ortalama hata (MAE)", om["MAE_ortalama"],
+                    help=(
+                        f"Tahminin gercek degerden ORTALAMA ne kadar saptigi (katlar arasi ortalama). "
+                        f"Ne kadar dusukse o kadar iyi. Katlar arasi degiskenlik (std): {om['MAE_std']} "
+                        f"-- bu sayi buyukse, model bazi donemlerde iyi bazilarinda kotu tahmin yapiyor demektir."
+                    ),
+                )
+                c2.metric(
+                    "Büyük hata cezası (RMSE)", om["RMSE_ortalama"],
+                    help="MAE'ye benzer, ama buyuk sapmalari daha agir cezalandirir (katlar arasi ortalama).",
+                )
+                c3.metric(
+                    "Yüzdesel hata (MAPE)", f"%{om['MAPE_ortalama_%']}",
+                    help="Hatayi yuzde olarak ifade eder (katlar arasi ortalama). Yorumlamasi en kolay olcut.",
+                )
+                c4.metric(
+                    "Yön doğruluğu", f"%{om['yon_dogruluk_ortalama_%']}",
+                    help=(
+                        f"Modelin verimliligin artacagini mi azalacagini mi dogru tahmin ettigi orani "
+                        f"(katlar arasi ortalama). %50=yazi-tura seviyesi. Katlar arasi degiskenlik (std): "
+                        f"%{om['yon_dogruluk_std']} -- bu sayi buyukse (orn. >15), modelin tutarliligina "
+                        f"tek bir katla degil, ancak bu ortalamayla guvenebilirsiniz."
+                    ),
+                )
+
+                if om["modelin_naiften_iyi_mi"]:
+                    st.success(
+                        f"✅ Katlar arasi ortalama MAE ({om['MAE_ortalama']}), naif tahminin ortalama "
+                        f"hatasindan ({om['naif_baseline_MAE_ortalama']}) **daha dusuk**. "
+                        f"{rbt['kat_sayisi']} kattan **{om['kat_basina_naiften_iyi_sayisi']}**'inde model "
+                        f"naiften daha iyi cikti."
+                    )
+                else:
+                    st.warning(
+                        f"⚠️ Katlar arasi ortalama MAE ({om['MAE_ortalama']}), naif tahminin ortalama "
+                        f"hatasindan ({om['naif_baseline_MAE_ortalama']}) **daha yuksek**. "
+                        f"{rbt['kat_sayisi']} kattan sadece **{om['kat_basina_naiften_iyi_sayisi']}**'inde "
+                        f"model naiften daha iyi cikti. 'Maliyeti X azaltirsam verimlilik Y artar' turu "
+                        f"yatirim tavsiyelerini bu sonuca gore TEMKINLI verin."
+                    )
+
+                if om["yon_dogruluk_std"] > 15:
+                    st.warning(
+                        f"⚠️ Yon dogrulugu katlar arasinda buyuk farklilik gosteriyor (std=%{om['yon_dogruluk_std']}) "
+                        f"-- modelin tutarliligi donemden doneme degisken, tek bir katla yargilamak yaniltici olurdu."
+                    )
+
+                st.write("---")
+                st.markdown("#### Kat Bazinda Detay")
+                kat_ozet_satirlari = []
+                for k in rbt["kat_detaylari"]:
+                    kat_ozet_satirlari.append({
+                        "Egitim donemleri": str(k["egitim_zamanlari"]), "Test donemi": str(k["test_zamani"]),
+                        "MAE": k["metrikler"]["MAE"], "Naif MAE": k["metrikler"]["naif_baseline_MAE"],
+                        "Naiften iyi mi": k["metrikler"]["modelin_naiften_iyi_mi"],
+                        "Yon Dogruluk (%)": k["metrikler"]["yon_dogruluk_%"],
+                    })
+                kat_ozet_df = pd.DataFrame(kat_ozet_satirlari)
+                st.dataframe(kat_ozet_df, width='stretch', hide_index=True)
+                st.bar_chart(kat_ozet_df.set_index("Test donemi")["Yon Dogruluk (%)"])
+
+                st.download_button(
+                    "Rolling backtest kat ozetini Excel indir", excel_indirme_verisi(kat_ozet_df),
+                    file_name="rolling_backtest_ozet.xlsx", mime=EXCEL_MIME, key="rolling_backtest_csv_dl",
+                )
+
 
 
