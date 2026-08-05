@@ -115,7 +115,7 @@ with st.expander("Excel sablonu nasil olmali?", expanded=False):
         "Girdi_SimSuresi": [382, 334, 400, 310],
         "Cikti_Hata": [14, 10, 12, 9],
     })
-    st.dataframe(ornek, width='stretch')
+    st.dataframe(ornek, use_container_width=True)
 
 uploaded = st.file_uploader("Excel dosyanizi yukleyin (.xlsx)", type=["xlsx"])
 
@@ -254,14 +254,14 @@ if "sonuc" in st.session_state:
         c3, c4 = st.columns(2)
         with c3:
             st.write("*CCR - Girdi Slack*")
-            st.dataframe(dea_d["slack_x_ccr"].round(4), width='stretch')
+            st.dataframe(dea_d["slack_x_ccr"].round(4), use_container_width=True)
             st.write("*CCR - Cikti Slack*")
-            st.dataframe(dea_d["slack_y_ccr"].round(4), width='stretch')
+            st.dataframe(dea_d["slack_y_ccr"].round(4), use_container_width=True)
         with c4:
             st.write("*BCC - Girdi Slack*")
-            st.dataframe(dea_d["slack_x_bcc"].round(4), width='stretch')
+            st.dataframe(dea_d["slack_x_bcc"].round(4), use_container_width=True)
             st.write("*BCC - Cikti Slack*")
-            st.dataframe(dea_d["slack_y_bcc"].round(4), width='stretch')
+            st.dataframe(dea_d["slack_y_bcc"].round(4), use_container_width=True)
 
         st.write("---")
         st.markdown("### 📋 Yorum: Etkin Olmayan DMU'lar Nasıl Etkin Hale Gelir?")
@@ -274,7 +274,7 @@ if "sonuc" in st.session_state:
         X_donem = sonuc["X"][donem_sec]
         Y_donem = sonuc["Y"][donem_sec]
         aksiyon_tablosu = dea_aksiyon_tablosu(dea_d, X_donem, Y_donem, vrs=vrs)
-        st.dataframe(aksiyon_tablosu, width='stretch')
+        st.dataframe(aksiyon_tablosu, use_container_width=True)
 
         etkin_olmayanlar = aksiyon_tablosu[~aksiyon_tablosu["etkin_mi"]]
         if etkin_olmayanlar.empty:
@@ -312,13 +312,13 @@ if "sonuc" in st.session_state:
             "**M (Malmquist Endeksi = EC × TC):** toplam verimlilik degisimi. M>1 -> verimlilik "
             "artmis; M<1 -> azalmis; M=1 -> degisim yok."
         )
-        st.dataframe(sonuc["malmquist"].round(4), width='stretch')
+        st.dataframe(sonuc["malmquist"].round(4), use_container_width=True)
 
         st.write("---")
         st.write("**Donem Bazinda Ortalama EC / TC / M (tum DMU'lar uzerinden, geometrik ortalama)**")
         gecisli_donemler = sonuc["veri"]["donem_sirali"][:-1]
         donem_ort = malmquist_donem_ortalamasi(sonuc["malmquist"], donem_sirasi=gecisli_donemler)
-        st.dataframe(donem_ort, width='stretch')
+        st.dataframe(donem_ort, use_container_width=True)
         st.caption(
             "Not: Ortalama, geometrik ortalama olarak hesaplanmistir -- EC/TC/M birer indeks (oran) "
             "oldugu icin bu, Malmquist literaturunde standart pratiktir (aritmetik ortalama yanıltıcı olabilir)."
@@ -420,16 +420,16 @@ if "sonuc" in st.session_state:
             "Hangisinin 'dogru' oldugunu yukaridaki 3 test (Poolability, BP-LM, Hausman) belirler."
         )
         st.write("**Pooled OLS**")
-        st.dataframe(reg_meta_table(p["pooled"]), width='stretch', hide_index=True)
-        st.dataframe(reg_params_table(p["pooled"]), width='stretch')
+        st.dataframe(reg_meta_table(p["pooled"]), use_container_width=True, hide_index=True)
+        st.dataframe(reg_params_table(p["pooled"]), use_container_width=True)
 
         st.write("**Fixed Effects (FE)**")
-        st.dataframe(reg_meta_table(p["fe"]), width='stretch', hide_index=True)
-        st.dataframe(reg_params_table(p["fe"]), width='stretch')
+        st.dataframe(reg_meta_table(p["fe"]), use_container_width=True, hide_index=True)
+        st.dataframe(reg_params_table(p["fe"]), use_container_width=True)
 
         st.write("**Random Effects (RE)**")
-        st.dataframe(reg_meta_table(p["re"]), width='stretch', hide_index=True)
-        st.dataframe(reg_params_table(p["re"]), width='stretch')
+        st.dataframe(reg_meta_table(p["re"]), use_container_width=True, hide_index=True)
+        st.dataframe(reg_params_table(p["re"]), use_container_width=True)
 
         tablo_map = {
             "pooled_robust": ("Pooled OLS - Robust Standart Hatalar", p["pooled_robust"]),
@@ -443,8 +443,8 @@ if "sonuc" in st.session_state:
 
         st.write("---")
         st.markdown(f"### ⭐ NIHAI SONUC: {nihai_baslik}")
-        st.dataframe(reg_meta_table(nihai_res), width='stretch', hide_index=True)
-        st.dataframe(reg_params_table(nihai_res), width='stretch')
+        st.dataframe(reg_meta_table(nihai_res), use_container_width=True, hide_index=True)
+        st.dataframe(reg_params_table(nihai_res), use_container_width=True)
         st.write("---")
 
         # --- Katsayilarin verimlilige (MI) etkisi -- yon ve buyukluk gosterimi ---
@@ -462,7 +462,7 @@ if "sonuc" in st.session_state:
         )
         st.dataframe(
             analiz_df.style.apply(_katsayi_renklendir, axis=1),
-            width='stretch', hide_index=True,
+            use_container_width=True, hide_index=True,
         )
 
         anlamli_grafik = analiz_df[analiz_df["anlamli_mi"]].set_index("degisken")["mi_etkisi_yuzde10"]
@@ -504,7 +504,7 @@ if "sonuc" in st.session_state:
 
                 st.dataframe(
                     kr["ozet_df"].reset_index().style.apply(_kararlilik_renklendir, axis=1),
-                    width='stretch', hide_index=True,
+                    use_container_width=True, hide_index=True,
                 )
                 if kr["basarisiz_dmular"]:
                     st.warning(f"Su DMU'lar cikarildiginda model kurulamadi (atlandi): {kr['basarisiz_dmular']}")
@@ -524,7 +524,7 @@ if "sonuc" in st.session_state:
                     )
 
                 with st.expander("Detay: Her DMU cikarildiginda katsayilar"):
-                    st.dataframe(kr["detay_df"].reset_index(), width='stretch', hide_index=True)
+                    st.dataframe(kr["detay_df"].reset_index(), use_container_width=True, hide_index=True)
 
                 st.download_button(
                     "Kararlilik testi ozetini Excel indir", excel_indirme_verisi(kr["ozet_df"]),
@@ -537,32 +537,32 @@ if "sonuc" in st.session_state:
             c_r, c_c = st.columns(2)
             with c_r:
                 st.write(f"*{p['secilen_model']} - Robust*")
-                st.dataframe(reg_params_table(p["robust"]), width='stretch')
+                st.dataframe(reg_params_table(p["robust"]), use_container_width=True)
             with c_c:
                 st.write(f"*{p['secilen_model']} - Clustered*")
-                st.dataframe(reg_params_table(p["clustered"]), width='stretch')
+                st.dataframe(reg_params_table(p["clustered"]), use_container_width=True)
         else:
             st.write("*(Bilgi amacli, Hausman'in FE/RE arasindan sectigi model)* "
                       f"{p['secilen_model']} - Robust Standart Hatalar*")
-            st.dataframe(reg_params_table(p["robust"]), width='stretch')
+            st.dataframe(reg_params_table(p["robust"]), use_container_width=True)
 
         st.write(f"*(Bilgi amacli) Pooled OLS - Robust vs Clustered*")
         c_pr, c_pc = st.columns(2)
         with c_pr:
             st.write("*Pooled OLS - Robust*")
-            st.dataframe(reg_params_table(p["pooled_robust"]), width='stretch')
+            st.dataframe(reg_params_table(p["pooled_robust"]), use_container_width=True)
         with c_pc:
             st.write("*Pooled OLS - Clustered*")
-            st.dataframe(reg_params_table(p["pooled_clustered"]), width='stretch')
+            st.dataframe(reg_params_table(p["pooled_clustered"]), use_container_width=True)
 
         st.write("**Model Karsilastirma (Pooled OLS vs FE vs RE)**")
         katsayi_tablo, tstat_tablo, ozet_tablo = comparison_tables(p["comparison"])
         st.write("*Katsayilar*")
-        st.dataframe(katsayi_tablo, width='stretch')
+        st.dataframe(katsayi_tablo, use_container_width=True)
         st.write("*T-istatistikleri*")
-        st.dataframe(tstat_tablo, width='stretch')
+        st.dataframe(tstat_tablo, use_container_width=True)
         st.write("*Model ozet istatistikleri*")
-        st.dataframe(ozet_tablo, width='stretch')
+        st.dataframe(ozet_tablo, use_container_width=True)
 
     with tab_gelecek:
         st.markdown("### 🔮 Gelecek Dönem Verimlilik Tahmini")
@@ -663,23 +663,23 @@ if "sonuc" in st.session_state:
                     "DMU seç (senaryo detay tablosu için)", options=sonuc["veri"]["dmu_sirali"],
                     key="gelecek_dmu_sec",
                 )
-                st.dataframe(gelecek["detay"].loc[dmu_sec_gelecek], width='stretch')
+                st.dataframe(gelecek["detay"].loc[dmu_sec_gelecek], use_container_width=True)
 
                 st.write("---")
                 st.markdown("#### Projeksiyon Dönemi DEA Sonuçları")
                 c1, c2 = st.columns(2)
                 with c1:
                     st.write("**CCR (theta)**")
-                    st.dataframe(gelecek["dea"]["theta_ccr"].round(4), width='stretch')
+                    st.dataframe(gelecek["dea"]["theta_ccr"].round(4), use_container_width=True)
                 with c2:
                     st.write("**BCC (theta)**")
-                    st.dataframe(gelecek["dea"]["theta_bcc"].round(4), width='stretch')
+                    st.dataframe(gelecek["dea"]["theta_bcc"].round(4), use_container_width=True)
                 st.write("**Ölçek Etkinliği**")
-                st.dataframe(gelecek["dea"]["olcek_etkinligi"].round(4), width='stretch')
+                st.dataframe(gelecek["dea"]["olcek_etkinligi"].round(4), use_container_width=True)
 
                 st.write("---")
                 st.markdown(f"#### Malmquist: {gelecek['son_donem']} → Projeksiyon Dönemi")
-                st.dataframe(gelecek["malmquist"].round(4), width='stretch')
+                st.dataframe(gelecek["malmquist"].round(4), use_container_width=True)
 
                 st.markdown("##### 📊 Dönemler Arası Ortalama Verimlilik Değişimi")
                 ec_ort = gelecek["malmquist"]["EC"].mean()
@@ -788,7 +788,7 @@ if "sonuc" in st.session_state:
         if "duyarlilik_tarama" in st.session_state:
             dt = st.session_state["duyarlilik_tarama"]
             st.markdown(f"#### {dt['girdi']} — {'Artır' if dt['yon']>0 else 'Azalt'} yönünde tarama sonucu")
-            st.dataframe(dt["sonuc_df"], width='stretch')
+            st.dataframe(dt["sonuc_df"], use_container_width=True)
             st.line_chart(dt["sonuc_df"]["Ortalama_M"])
 
             en_iyi_yuzde = dt["sonuc_df"]["Ortalama_M"].idxmax()
@@ -857,7 +857,7 @@ if "sonuc" in st.session_state:
                     {"Girdi": g, "Optimum Yüzde": f"%{v*100:+.1f}", "Yön": "Artır" if v >= 0 else "Azalt"}
                     for g, v in opt["en_iyi_yuzdeler"].items()
                 ])
-                st.dataframe(en_iyi_df, width='stretch', hide_index=True)
+                st.dataframe(en_iyi_df, use_container_width=True, hide_index=True)
 
                 for g, v in opt["en_iyi_yuzdeler"].items():
                     if abs(abs(v) - max(abs(opt["sinir_araligi"][0]), abs(opt["sinir_araligi"][1]))) < 0.005:
@@ -866,7 +866,7 @@ if "sonuc" in st.session_state:
                 st.markdown("##### Arama Geçmişi (Yakınsama)")
                 st.dataframe(
                     opt["tum_denemeler"].sort_values("Ortalama_M", ascending=False).reset_index(drop=True),
-                    width='stretch',
+                    use_container_width=True,
                 )
                 st.line_chart(opt["tum_denemeler"]["Ortalama_M"].reset_index(drop=True))
 
@@ -993,7 +993,7 @@ if "sonuc" in st.session_state:
 
                 st.dataframe(
                     bt["tahmin_df"].reset_index().style.apply(_yon_renklendir, axis=1),
-                    width='stretch', hide_index=True,
+                    use_container_width=True, hide_index=True,
                 )
 
                 st.caption(
@@ -1112,7 +1112,7 @@ if "sonuc" in st.session_state:
                         "Yon Dogruluk (%)": k["metrikler"]["yon_dogruluk_%"],
                     })
                 kat_ozet_df = pd.DataFrame(kat_ozet_satirlari)
-                st.dataframe(kat_ozet_df, width='stretch', hide_index=True)
+                st.dataframe(kat_ozet_df, use_container_width=True, hide_index=True)
                 st.bar_chart(kat_ozet_df.set_index("Test donemi")["Yon Dogruluk (%)"])
 
                 st.download_button(
@@ -1170,7 +1170,7 @@ if "sonuc" in st.session_state:
             st.write("---")
             st.markdown("#### Model Katsayıları / Özellik Önemleri")
             mp = ml["model_paketi"]
-            st.dataframe(mp["katsayilar"], width='stretch')
+            st.dataframe(mp["katsayilar"], use_container_width=True)
             if mp["secilen_alpha"] is not None:
                 st.caption(f"Çapraz doğrulamayla seçilen düzenlileştirme gücü (alpha): {mp['secilen_alpha']:.4g}")
 
