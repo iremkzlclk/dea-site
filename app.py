@@ -11,7 +11,8 @@ from excel_okuma import excel_oku, donemlere_ayir, VeriDogrulamaHatasi
 from dea_module import min_dmu_kontrolu
 from panel_module import leave_one_out_kararlilik
 from pipeline import run_pipeline
-from senaryo_module import girdi_yon_bilgisi, gelecek_donem_analizi_manuel
+from senaryo_module import girdi_yon_bilgisi, gelecek_donem_analizi_manuel, duyarlilik_taramasi, optimum_senaryo_bul
+from ml_module import model_egit, ml_backtest_calistir, ml_rolling_backtest_calistir, MODEL_ACIKLAMALARI
 from backtest_module import backtest_calistir, rolling_backtest_calistir
 from yorumlama import (
     malmquist_yorum_metni,
@@ -171,7 +172,7 @@ if uploaded is not None:
             # DMU/donem setine sahip yeni bir dosya yuklendiginde, eski sonuclar (gelecek
             # senaryosu, backtest, kararlilik testi) yeni DMU/degisken listesiyle uyusmayip
             # KeyError'a yol acabilir (secim kutulari yeni veriden, sonuc eskisinden gelir).
-            for eski_anahtar in ["gelecek_manuel", "backtest", "rolling_backtest", "kararlilik"]:
+            for eski_anahtar in ["gelecek_manuel", "duyarlilik_tarama", "optimizasyon", "backtest", "rolling_backtest", "kararlilik", "ml_sonuc"]:
                 st.session_state.pop(eski_anahtar, None)
 
     except VeriDogrulamaHatasi as e:
@@ -184,9 +185,9 @@ if "sonuc" in st.session_state:
     girdi_cols = sonuc["veri"]["girdi_cols"]
     cikti_cols = sonuc["veri"]["cikti_cols"]
 
-    tab_dea, tab_malmquist, tab_panel, tab_gelecek, tab_backtest = st.tabs(
+    tab_dea, tab_malmquist, tab_panel, tab_gelecek, tab_backtest, tab_ml = st.tabs(
         ["DEA Sonuclari", "Malmquist Sonuclari", "Panel Analizi", "Gelecek Verimlilik Tahmini",
-         "Backtest (Model Dogrulama)"]
+         "Backtest (Model Dogrulama)", "ML Tahmin"]
     )
 
     with tab_dea:
@@ -592,6 +593,24 @@ if "sonuc" in st.session_state:
 
         st.caption(f"Nihai model: **{oneri_gelecek['sonuc_basligi']}** — bu modelin katsayılarına göre öneriler aşağıda gösteriliyor.")
 
+        if st.button(
+            "🔄 Panel Önerisine Göre Otomatik Doldur (Anlamlı Girdiler İçin, Başlangıç %5)",
+            key="oto_doldur_btn",
+        ):
+            for g in girdi_cols:
+                if g in girdi_bilgisi.index and bool(girdi_bilgisi.loc[g, "anlamli_mi"]):
+                    onerilen_yon_g = girdi_bilgisi.loc[g, "onerilen_yon"]
+                    st.session_state[f"gelecek_yon_{g}"] = "Artır" if onerilen_yon_g > 0 else "Azalt"
+                    st.session_state[f"gelecek_yuzde_{g}"] = 5.0
+                else:
+                    st.session_state[f"gelecek_yuzde_{g}"] = 0.0
+            st.success(
+                "Panelde anlamlı çıkan girdiler, kendi katsayılarının işaret ettiği yönde, %5 ile "
+                "dolduruldu. Anlamsız girdiler %0'da (değişmeden) bırakıldı -- güvenilir bir kanıt "
+                "olmadan bunları hareket ettirmiyoruz. Aşağıdan istediğiniz girdinin yüzdesini "
+                "(örn. Duyarlılık Taraması ile) daha da artırabilirsiniz."
+            )
+
         st.markdown("#### Her girdi için yön ve yüzde seçin")
         girdi_secimleri = {}
         for g in girdi_cols:
@@ -619,7 +638,7 @@ if "sonuc" in st.session_state:
                     )
                 with c2:
                     yuzde_secim = st.number_input(
-                        "Yüzde (%)", min_value=0.0, max_value=200.0, value=10.0, step=1.0,
+                        "Yüzde (%)", min_value=0.0, max_value=200.0, value=5.0, step=1.0,
                         key=f"gelecek_yuzde_{g}",
                     )
                 girdi_secimleri[g] = {"yon": 1 if yon_secim == "Artır" else -1, "yuzde": yuzde_secim / 100.0}
@@ -714,6 +733,146 @@ if "sonuc" in st.session_state:
                 st.download_button(
                     "Senaryo detay tablosunu Excel indir", excel_indirme_verisi(gelecek["detay"]),
                     file_name="gelecek_senaryo_manuel.xlsx", mime=EXCEL_MIME, key="gelecek_csv_dl",
+                )
+
+        st.write("---")
+        st.markdown("### 📈 Duyarlılık Taraması — \"Yüzde Kaç?\" Sorusuna Kanıta Dayalı Cevap")
+        st.markdown("""
+        Yukarıdaki senaryo TEK BİR yüzde ile çalışır. Ama "yatırım yapmalı mıyım, ne kadar?"
+        sorusuna tek bir tahminle değil, **bir aralığı tarayarak** cevap vermek çok daha
+        savunulabilir. Bu bölüm, **TEK BİR girdiyi** (diğerleri sabitken, izole etki) seçtiğiniz
+        yön boyunca **birden fazla yüzdeyle** art arda dener ve sonuçları bir eğri olarak gösterir.
+
+        ⚠️ **Öneri:** Bu taramayı sadece panelin "azalt" önerdiği (negatif katsayılı, DEA
+        teorisiyle tutarlı) girdiler için kullanın. Panelin "artır" önerdiği (pozitif katsayılı)
+        girdilerde, artış yönünde tarama yapmak DEA'nın yapısal mantığıyla çelişebilir
+        (bkz. Panel Analizi sekmesindeki "celiski" işareti) -- bu girdiler için taramayı
+        yine de görebilirsiniz, ama sonucu bir "reçete" olarak değil, sadece bilgi amaçlı
+        okuyun.
+        """)
+
+        girdi_tarama_sec = st.selectbox(
+            "Taranacak girdiyi seçin", options=girdi_cols, key="tarama_girdi_sec",
+        )
+        onerilen_yon_tarama = (
+            girdi_bilgisi.loc[girdi_tarama_sec, "onerilen_yon"] if girdi_tarama_sec in girdi_bilgisi.index else 1
+        )
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            yon_tarama_secim = st.radio(
+                "Tarama yönü", ["Artır", "Azalt"],
+                index=0 if onerilen_yon_tarama > 0 else 1,
+                key="tarama_yon", horizontal=True,
+            )
+        with c2:
+            yuzde_araligi_metin = st.text_input(
+                "Taranacak yüzdeler (virgülle ayırın)", value="5,10,15,20,25,30",
+                key="tarama_yuzdeler",
+            )
+
+        if st.button("Duyarlılık Taramasını Çalıştır", type="primary", key="tarama_calistir_btn"):
+            try:
+                yuzde_listesi = [float(v.strip()) / 100.0 for v in yuzde_araligi_metin.split(",") if v.strip()]
+            except ValueError:
+                yuzde_listesi = []
+                st.error("Yüzdeleri '5,10,15' gibi virgülle ayrılmış sayılar olarak girin.")
+
+            if yuzde_listesi:
+                with st.spinner(f"{girdi_tarama_sec} için {len(yuzde_listesi)} farklı yüzde deneniyor (her biri DEA+Malmquist'i yeniden çözüyor, biraz sürebilir)..."):
+                    yon_tarama = 1 if yon_tarama_secim == "Artır" else -1
+                    st.session_state["duyarlilik_tarama"] = {
+                        "girdi": girdi_tarama_sec, "yon": yon_tarama,
+                        "sonuc_df": duyarlilik_taramasi(sonuc, girdi_tarama_sec, yon_tarama, yuzde_listesi),
+                    }
+
+        if "duyarlilik_tarama" in st.session_state:
+            dt = st.session_state["duyarlilik_tarama"]
+            st.markdown(f"#### {dt['girdi']} — {'Artır' if dt['yon']>0 else 'Azalt'} yönünde tarama sonucu")
+            st.dataframe(dt["sonuc_df"], width='stretch')
+            st.line_chart(dt["sonuc_df"]["Ortalama_M"])
+
+            en_iyi_yuzde = dt["sonuc_df"]["Ortalama_M"].idxmax()
+            en_iyi_m = dt["sonuc_df"]["Ortalama_M"].max()
+            st.success(
+                f"Taranan aralıkta en yüksek ortalama M, **%{en_iyi_yuzde*100:g}** "
+                f"{'artış' if dt['yon']>0 else 'azalış'} ile elde ediliyor (Ortalama M={en_iyi_m:.4f}, "
+                f"yani verimlilikte yaklaşık %{(en_iyi_m-1)*100:.1f} değişim)."
+            )
+            st.caption(
+                "⚠️ Bu, taranan aralıktaki EN İYİ noktadır -- aralığın dışında (örn. %30'un ötesinde) "
+                "ne olacağını göstermez, ve tarihsel bant sınırlaması nedeniyle çok yüksek yüzdelerde "
+                "sonuçlar kırpılmış olabilir (detay tablosundaki 'sinir_uygulandi' bayrağını kontrol edin)."
+            )
+
+            st.download_button(
+                "Duyarlılık taraması sonucunu Excel indir", excel_indirme_verisi(dt["sonuc_df"]),
+                file_name=f"duyarlilik_taramasi_{dt['girdi']}.xlsx", mime=EXCEL_MIME, key="tarama_csv_dl",
+            )
+
+        st.write("---")
+        st.markdown("### 🎯 Optimum Senaryo Bul (Otomatik Optimizasyon)")
+        st.markdown("""
+        Duyarlılık taraması TEK BİR girdiyi tarar. Bu bölüm ise **TÜM anlamlı girdileri
+        AYNI ANDA**, SciPy'nin türevsiz yerel arama algoritmasıyla (Nelder-Mead) optimize
+        ederek, **ortalama verimliliği (M) en çok artıran kombinasyonu** bulur.
+
+        **Önemli fark:** Optimizör, panelin "artır/azalt" önerisini bir KURAL olarak
+        almaz -- her girdi için hem artış hem azalışı dener ve **gerçek DEA sonucuna**
+        göre karar verir. Panelin "artır" dediği ama DEA'nın yapısal olarak
+        cezalandırdığı bir girdi varsa, optimizör bunu **kendi kendine keşfeder**
+        ve o girdiyi azaltma yönünde önerebilir -- panel-DEA çelişkisini bu şekilde
+        doğrudan çözer.
+
+        ⚠️ Bu YEREL bir arama -- küresel en iyiyi bulmayı garanti etmez. Sonuçtaki
+        "tüm denemeler" tablosunu inceleyerek aramanın gerçekten yakınsadığını
+        (M'nin düzleştiğini) kontrol edin. Eğer en iyi sonuç sınırın (%±30) tam
+        ucundaysa, bu sınırın kendisi bağlayıcı demektir -- daha geniş bir aralık
+        denemek isteyebilirsiniz.
+        """)
+
+        c1, c2 = st.columns(2)
+        with c1:
+            sinir_alt = st.number_input("Alt sınır (%)", min_value=-90.0, max_value=0.0, value=-30.0, step=5.0, key="opt_alt_sinir")
+        with c2:
+            sinir_ust = st.number_input("Üst sınır (%)", min_value=0.0, max_value=90.0, value=30.0, step=5.0, key="opt_ust_sinir")
+
+        if st.button("Optimum Senaryoyu Bul", type="primary", key="optimizasyon_btn"):
+            with st.spinner("Anlamlı girdiler için en iyi kombinasyon aranıyor (her deneme DEA+Malmquist'i yeniden çözüyor, ~10-30 saniye sürebilir)..."):
+                st.session_state["optimizasyon"] = optimum_senaryo_bul(
+                    sonuc, sinir_araligi=(sinir_alt / 100.0, sinir_ust / 100.0),
+                )
+
+        if "optimizasyon" in st.session_state:
+            opt = st.session_state["optimizasyon"]
+            if not opt["basarili"]:
+                st.error(opt["mesaj"])
+            else:
+                st.success(
+                    f"✅ {opt['deneme_sayisi']} deneme sonucu bulunan en iyi kombinasyon, ortalama "
+                    f"M={opt['en_iyi_M']:.4f} (%{(opt['en_iyi_M']-1)*100:+.1f} verimlilik değişimi) veriyor. "
+                    f"{'Arama yakınsadı.' if opt['yakinsadi_mi'] else '⚠️ Arama tam yakınsamadı, sonucu temkinli değerlendirin.'}"
+                )
+
+                en_iyi_df = pd.DataFrame([
+                    {"Girdi": g, "Optimum Yüzde": f"%{v*100:+.1f}", "Yön": "Artır" if v >= 0 else "Azalt"}
+                    for g, v in opt["en_iyi_yuzdeler"].items()
+                ])
+                st.dataframe(en_iyi_df, width='stretch', hide_index=True)
+
+                for g, v in opt["en_iyi_yuzdeler"].items():
+                    if abs(abs(v) - max(abs(opt["sinir_araligi"][0]), abs(opt["sinir_araligi"][1]))) < 0.005:
+                        st.warning(f"⚠️ **{g}** için bulunan optimum, sınırın tam ucunda (%{v*100:+.1f}) -- sınırı genişletmek isteyebilirsiniz.")
+
+                st.markdown("##### Arama Geçmişi (Yakınsama)")
+                st.dataframe(
+                    opt["tum_denemeler"].sort_values("Ortalama_M", ascending=False).reset_index(drop=True),
+                    width='stretch',
+                )
+                st.line_chart(opt["tum_denemeler"]["Ortalama_M"].reset_index(drop=True))
+
+                st.download_button(
+                    "Optimizasyon sonucunu Excel indir", excel_indirme_verisi(opt["tum_denemeler"]),
+                    file_name="optimum_senaryo.xlsx", mime=EXCEL_MIME, key="opt_csv_dl",
                 )
 
     with tab_backtest:
@@ -963,3 +1122,97 @@ if "sonuc" in st.session_state:
 
 
 
+    with tab_ml:
+        st.markdown("### 🤖 Makine Öğrenmesi ile Tahmin")
+        st.markdown("""
+        Bu bölüm, panel regresyonundaki anlamlı girdi değişkenlerinin MI üzerindeki
+        etkisini, **düzenlileştirilmiş (regularized) regresyon** modelleriyle -- Ridge,
+        Lasso, ElasticNet -- somutlaştırır. Ayrıca karşılaştırma için sıkı sınırlandırılmış
+        bir Random Forest de sunulur.
+
+        ⚠️ **Neden Random Forest / Gradient Boosting / Neural Network kullanılmıyor:**
+        Bu yöntemler genelde yüzlerce-binlerce gözlem gerektirir. Sizin veri
+        büyüklüğünüzde (N~12-15 DMU × T~6-8 dönem ≈ 60-100 gözlem), bu modeller
+        eğitim verisini ezberler (overfit) ve gerçekte panel regresyonundan **daha
+        kötü** tahmin eder. Ridge/Lasso/ElasticNet, küçük örneklemde güvenilir
+        çalışan, yine de makine öğrenmesi kapsamındaki (çapraz doğrulamayla otomatik
+        düzenlileştirme seçimi) yöntemlerdir.
+
+        Tüm modeller, **Backtest sekmesiyle birebir aynı** doğrulama çerçevesini
+        (leave-last-period-out + rolling backtest, MAE/RMSE/yön doğruluğu, naif
+        karşılaştırması) kullanır -- böylece klasik panel regresyonuyla **doğrudan,
+        adil bir kıyaslama** yapabilirsiniz.
+        """)
+
+        model_secim = st.selectbox(
+            "Model seçin", options=["ridge", "lasso", "elasticnet", "random_forest"],
+            format_func=lambda x: {"ridge": "Ridge (L2)", "lasso": "Lasso (L1)",
+                                     "elasticnet": "ElasticNet (L1+L2)",
+                                     "random_forest": "Random Forest (dikkatli yorumlayın)"}[x],
+            key="ml_model_secim",
+        )
+        st.caption(MODEL_ACIKLAMALARI[model_secim])
+
+        bagimsizlar_ml = girdi_cols + cikti_cols
+
+        if st.button("ML Modelini Çalıştır", type="primary", key="ml_calistir_btn"):
+            with st.spinner(f"{model_secim} modeli eğitiliyor ve doğrulanıyor..."):
+                st.session_state["ml_sonuc"] = {
+                    "model_tipi": model_secim,
+                    "model_paketi": model_egit(sonuc["panel_df"], bagimsizlar_ml, model_secim),
+                    "backtest": ml_backtest_calistir(sonuc["panel_df"], bagimsizlar_ml, model_secim),
+                    "rolling": ml_rolling_backtest_calistir(sonuc["panel_df"], bagimsizlar_ml, model_secim),
+                }
+
+        if "ml_sonuc" in st.session_state and st.session_state["ml_sonuc"]["model_tipi"] == model_secim:
+            ml = st.session_state["ml_sonuc"]
+
+            st.write("---")
+            st.markdown("#### Model Katsayıları / Özellik Önemleri")
+            mp = ml["model_paketi"]
+            st.dataframe(mp["katsayilar"], width='stretch')
+            if mp["secilen_alpha"] is not None:
+                st.caption(f"Çapraz doğrulamayla seçilen düzenlileştirme gücü (alpha): {mp['secilen_alpha']:.4g}")
+
+            st.write("---")
+            st.markdown("#### Tek Katlı Backtest (ML Modeli)")
+            bt = ml["backtest"]
+            if not bt["yeterli_veri"]:
+                st.error(bt["mesaj"])
+            else:
+                m = bt["metrikler"]
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Ortalama hata (MAE)", m["MAE"])
+                c2.metric("Büyük hata cezası (RMSE)", m["RMSE"])
+                c3.metric("Yüzdesel hata (MAPE)", f"%{m['MAPE_%']}")
+                c4.metric("Yön doğruluğu", f"%{m['yon_dogruluk_%']}")
+                if m["modelin_naiften_iyi_mi"]:
+                    st.success(f"✅ ML modelinin MAE'si ({m['MAE']}), naif tahminden ({m['naif_baseline_MAE']}) daha düşük.")
+                else:
+                    st.warning(f"⚠️ ML modelinin MAE'si ({m['MAE']}), naif tahminden ({m['naif_baseline_MAE']}) daha yüksek veya eşit.")
+
+            st.write("---")
+            st.markdown("#### Rolling Backtest (ML Modeli)")
+            rbt = ml["rolling"]
+            if not rbt["yeterli_veri"]:
+                st.error(rbt["mesaj"])
+            else:
+                om = rbt["ortalama_metrikler"]
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Ortalama MAE", om["MAE_ortalama"], help=f"Katlar arası std: {om['MAE_std']}")
+                c2.metric("Ortalama Yön Doğruluğu", f"%{om['yon_dogruluk_ortalama_%']}", help=f"Katlar arası std: %{om['yon_dogruluk_std']}")
+                c3.metric("Naiften iyi olan kat sayısı", f"{om['kat_basina_naiften_iyi_sayisi']}/{rbt['kat_sayisi']}")
+
+                st.markdown("##### 📊 Panel Regresyonu ile Karşılaştırma")
+                st.caption(
+                    "Aynı metrikleri Backtest sekmesindeki klasik panel regresyonu sonuçlarıyla "
+                    "karşılaştırarak, ML modelinin gerçekten ek bir değer katıp katmadığını görebilirsiniz "
+                    "-- Backtest sekmesini de çalıştırdıysanız oradaki 'Ortalama MAE' ve 'Ortalama Yön "
+                    "Doğruluğu' değerleriyle yukarıdakileri yan yana koyun."
+                )
+
+                st.download_button(
+                    "ML rolling backtest sonucunu Excel indir",
+                    excel_indirme_verisi(pd.DataFrame([k["metrikler"] for k in rbt["kat_detaylari"]])),
+                    file_name=f"ml_backtest_{model_secim}.xlsx", mime=EXCEL_MIME, key="ml_csv_dl",
+                )
