@@ -242,6 +242,37 @@ def manuel_senaryo_olustur(X: dict, Y: dict, donemler: list, girdi_cols: list, c
     return X_next, Y_next, detay
 
 
+def duyarlilik_taramasi(sonuc: dict, girdi_adi: str, yon: int, yuzde_listesi: list) -> pd.DataFrame:
+    """
+    TEK BIR girdi icin, VERILEN yuzde listesindeki HER deger icin ayri ayri
+    senaryo hesaplar (DEA + Malmquist tekrar cozulur) ve sonuclari tek bir
+    tabloda ozetler. Diger girdiler DEGISTIRILMEZ (izole etki).
+
+    Amac: "Bu girdiyi ne kadar degistirmeliyim" sorusuna TEK BIR tahmin
+    yerine, bir DUYARLILIK EGRISI ile cevap vermek -- boylece secilen yuzde,
+    "rastgele bir sayi" degil, taranmis ve gozlemlenmis bir sonuca dayanir.
+
+    girdi_adi: taranacak TEK girdinin adi (digerleri sabit kalir)
+    yon: +1 (artir) veya -1 (azalt) -- taramanin tamami bu yonde yapilir
+    yuzde_listesi: taranacak yuzdeler, orn. [0.05, 0.10, 0.15, 0.20, 0.25, 0.30]
+
+    Returns: DataFrame (index=yuzde) -- Ortalama_EC, Ortalama_TC, Ortalama_M,
+             M_degisim_yuzde (baz M=1.0'a gore, informational)
+    """
+    satirlar = []
+    for yuzde in yuzde_listesi:
+        girdi_secimleri = {girdi_adi: {"yon": yon, "yuzde": float(yuzde)}}
+        gelecek = gelecek_donem_analizi_manuel(sonuc, girdi_secimleri)
+        m_ort = gelecek["malmquist"]["M"].mean()
+        ec_ort = gelecek["malmquist"]["EC"].mean()
+        tc_ort = gelecek["malmquist"]["TC"].mean()
+        satirlar.append({
+            "yuzde": yuzde, "Ortalama_EC": round(ec_ort, 4), "Ortalama_TC": round(tc_ort, 4),
+            "Ortalama_M": round(m_ort, 4), "M_degisim_yuzde": round((m_ort - 1) * 100, 2),
+        })
+    return pd.DataFrame(satirlar).set_index("yuzde")
+
+
 def gelecek_donem_analizi_manuel(sonuc: dict, girdi_secimleri: dict) -> dict:
     """
     Ana orkestrasyon: kullanicinin her girdi icin kendi sectigi yon+yuzde ile

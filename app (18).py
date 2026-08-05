@@ -11,7 +11,7 @@ from excel_okuma import excel_oku, donemlere_ayir, VeriDogrulamaHatasi
 from dea_module import min_dmu_kontrolu
 from panel_module import leave_one_out_kararlilik
 from pipeline import run_pipeline
-from senaryo_module import girdi_yon_bilgisi, gelecek_donem_analizi_manuel
+from senaryo_module import girdi_yon_bilgisi, gelecek_donem_analizi_manuel, duyarlilik_taramasi
 from backtest_module import backtest_calistir, rolling_backtest_calistir
 from yorumlama import (
     malmquist_yorum_metni,
@@ -171,7 +171,7 @@ if uploaded is not None:
             # DMU/donem setine sahip yeni bir dosya yuklendiginde, eski sonuclar (gelecek
             # senaryosu, backtest, kararlilik testi) yeni DMU/degisken listesiyle uyusmayip
             # KeyError'a yol acabilir (secim kutulari yeni veriden, sonuc eskisinden gelir).
-            for eski_anahtar in ["gelecek_manuel", "backtest", "rolling_backtest", "kararlilik"]:
+            for eski_anahtar in ["gelecek_manuel", "duyarlilik_tarama", "backtest", "rolling_backtest", "kararlilik"]:
                 st.session_state.pop(eski_anahtar, None)
 
     except VeriDogrulamaHatasi as e:
@@ -715,6 +715,80 @@ if "sonuc" in st.session_state:
                     "Senaryo detay tablosunu Excel indir", excel_indirme_verisi(gelecek["detay"]),
                     file_name="gelecek_senaryo_manuel.xlsx", mime=EXCEL_MIME, key="gelecek_csv_dl",
                 )
+
+        st.write("---")
+        st.markdown("### 📈 Duyarlılık Taraması — \"Yüzde Kaç?\" Sorusuna Kanıta Dayalı Cevap")
+        st.markdown("""
+        Yukarıdaki senaryo TEK BİR yüzde ile çalışır. Ama "yatırım yapmalı mıyım, ne kadar?"
+        sorusuna tek bir tahminle değil, **bir aralığı tarayarak** cevap vermek çok daha
+        savunulabilir. Bu bölüm, **TEK BİR girdiyi** (diğerleri sabitken, izole etki) seçtiğiniz
+        yön boyunca **birden fazla yüzdeyle** art arda dener ve sonuçları bir eğri olarak gösterir.
+
+        ⚠️ **Öneri:** Bu taramayı sadece panelin "azalt" önerdiği (negatif katsayılı, DEA
+        teorisiyle tutarlı) girdiler için kullanın. Panelin "artır" önerdiği (pozitif katsayılı)
+        girdilerde, artış yönünde tarama yapmak DEA'nın yapısal mantığıyla çelişebilir
+        (bkz. Panel Analizi sekmesindeki "celiski" işareti) -- bu girdiler için taramayı
+        yine de görebilirsiniz, ama sonucu bir "reçete" olarak değil, sadece bilgi amaçlı
+        okuyun.
+        """)
+
+        girdi_tarama_sec = st.selectbox(
+            "Taranacak girdiyi seçin", options=girdi_cols, key="tarama_girdi_sec",
+        )
+        onerilen_yon_tarama = (
+            girdi_bilgisi.loc[girdi_tarama_sec, "onerilen_yon"] if girdi_tarama_sec in girdi_bilgisi.index else 1
+        )
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            yon_tarama_secim = st.radio(
+                "Tarama yönü", ["Artır", "Azalt"],
+                index=0 if onerilen_yon_tarama > 0 else 1,
+                key="tarama_yon", horizontal=True,
+            )
+        with c2:
+            yuzde_araligi_metin = st.text_input(
+                "Taranacak yüzdeler (virgülle ayırın)", value="5,10,15,20,25,30",
+                key="tarama_yuzdeler",
+            )
+
+        if st.button("Duyarlılık Taramasını Çalıştır", type="primary", key="tarama_calistir_btn"):
+            try:
+                yuzde_listesi = [float(v.strip()) / 100.0 for v in yuzde_araligi_metin.split(",") if v.strip()]
+            except ValueError:
+                yuzde_listesi = []
+                st.error("Yüzdeleri '5,10,15' gibi virgülle ayrılmış sayılar olarak girin.")
+
+            if yuzde_listesi:
+                with st.spinner(f"{girdi_tarama_sec} için {len(yuzde_listesi)} farklı yüzde deneniyor (her biri DEA+Malmquist'i yeniden çözüyor, biraz sürebilir)..."):
+                    yon_tarama = 1 if yon_tarama_secim == "Artır" else -1
+                    st.session_state["duyarlilik_tarama"] = {
+                        "girdi": girdi_tarama_sec, "yon": yon_tarama,
+                        "sonuc_df": duyarlilik_taramasi(sonuc, girdi_tarama_sec, yon_tarama, yuzde_listesi),
+                    }
+
+        if "duyarlilik_tarama" in st.session_state:
+            dt = st.session_state["duyarlilik_tarama"]
+            st.markdown(f"#### {dt['girdi']} — {'Artır' if dt['yon']>0 else 'Azalt'} yönünde tarama sonucu")
+            st.dataframe(dt["sonuc_df"], width='stretch')
+            st.line_chart(dt["sonuc_df"]["Ortalama_M"])
+
+            en_iyi_yuzde = dt["sonuc_df"]["Ortalama_M"].idxmax()
+            en_iyi_m = dt["sonuc_df"]["Ortalama_M"].max()
+            st.success(
+                f"Taranan aralıkta en yüksek ortalama M, **%{en_iyi_yuzde*100:g}** "
+                f"{'artış' if dt['yon']>0 else 'azalış'} ile elde ediliyor (Ortalama M={en_iyi_m:.4f}, "
+                f"yani verimlilikte yaklaşık %{(en_iyi_m-1)*100:.1f} değişim)."
+            )
+            st.caption(
+                "⚠️ Bu, taranan aralıktaki EN İYİ noktadır -- aralığın dışında (örn. %30'un ötesinde) "
+                "ne olacağını göstermez, ve tarihsel bant sınırlaması nedeniyle çok yüksek yüzdelerde "
+                "sonuçlar kırpılmış olabilir (detay tablosundaki 'sinir_uygulandi' bayrağını kontrol edin)."
+            )
+
+            st.download_button(
+                "Duyarlılık taraması sonucunu Excel indir", excel_indirme_verisi(dt["sonuc_df"]),
+                file_name=f"duyarlilik_taramasi_{dt['girdi']}.xlsx", mime=EXCEL_MIME, key="tarama_csv_dl",
+            )
 
     with tab_backtest:
         st.markdown("### 🎯 Backtest — Panel Modelinin Gercek Tahmin Gucu")
