@@ -661,11 +661,42 @@ if "sonuc" in st.session_state:
                 st.write("---")
                 st.markdown(f"#### Malmquist: {gelecek['son_donem']} → Projeksiyon Dönemi")
                 st.dataframe(gelecek["malmquist"].round(4), width='stretch')
-                st.caption(
-                    f"Ortalama EC: {gelecek['malmquist']['EC'].mean():.4f} — "
-                    f"Ortalama TC: {gelecek['malmquist']['TC'].mean():.4f} — "
-                    f"Ortalama M: {gelecek['malmquist']['M'].mean():.4f}"
+
+                st.markdown("##### 📊 Dönemler Arası Ortalama Verimlilik Değişimi")
+                ec_ort = gelecek["malmquist"]["EC"].mean()
+                tc_ort = gelecek["malmquist"]["TC"].mean()
+                m_ort = gelecek["malmquist"]["M"].mean()
+
+                cm1, cm2, cm3 = st.columns(3)
+                cm1.metric(
+                    "Ortalama EC (Etkinlik Değişimi)", f"{ec_ort:.4f}",
+                    help="DMU'ların kendi potansiyel sınırlarına (frontier) ortalama ne kadar yaklaştığı/uzaklaştığı.",
                 )
+                cm2.metric(
+                    "Ortalama TC (Teknoloji Değişimi)", f"{tc_ort:.4f}",
+                    help="Genel referans sınırının (en iyi uygulama seviyesinin) ortalama ne kadar ilerlediği/gerilediği.",
+                )
+                cm3.metric(
+                    "Ortalama M (Toplam Verimlilik)", f"{m_ort:.4f}",
+                    delta=f"{(m_ort - 1) * 100:+.1f}%",
+                    help="EC × TC. 1'den büyükse ortalama verimlilik artmış, küçükse azalmış demektir.",
+                )
+
+                if m_ort > 1.005:
+                    st.success(
+                        f"✅ Bu senaryoya göre, **{gelecek['son_donem']}** ile projeksiyon dönemi arasında "
+                        f"tüm DMU'lar genelinde **ortalama verimlilik yaklaşık %{(m_ort-1)*100:.1f} artıyor**."
+                    )
+                elif m_ort < 0.995:
+                    st.warning(
+                        f"⚠️ Bu senaryoya göre, **{gelecek['son_donem']}** ile projeksiyon dönemi arasında "
+                        f"tüm DMU'lar genelinde **ortalama verimlilik yaklaşık %{(1-m_ort)*100:.1f} azalıyor**."
+                    )
+                else:
+                    st.info(
+                        f"Bu senaryoya göre, **{gelecek['son_donem']}** ile projeksiyon dönemi arasında "
+                        f"ortalama verimlilik pratik olarak değişmiyor (M≈1.00)."
+                    )
 
                 st.markdown("##### Yorum")
                 malmquist_yorum_sec = st.selectbox(
