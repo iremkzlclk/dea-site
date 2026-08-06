@@ -183,7 +183,16 @@ def senaryo_tahmin_et(model_paketi: dict, sonuc: dict, girdi_cols: list, cikti_c
     Egitilmis ML modelini kullanarak, kullanicinin sectigi girdi yuzde
     degisiklikleriyle BIR SONRAKI DONEM icin MI tahmini uretir -- DEA'yi
     yeniden cozmeden, dogrudan modelin ogrendigi iliskiyi kullanarak
-    (bu yuzden ANINDA sonuc verir, kaydirici hareket ettikce guncellenebilir).
+    (bu yuzden ANINDA sonuc verir).
+
+    KIYASLAMA NOKTASI: modelin "hicbir sey degismeseydi ne tahmin ederdim"
+    OZ-TAHMINI DEGIL -- SON DONEMIN GERCEKTEN GERCEKLESMIS (olculmus) MI
+    degeri kullanilir. Bunun nedeni: modelin kendi taban tahmini, gecmis
+    veride ogrendigi dogal bir trendi (orn. "MI zaten kendiliginden artiyor")
+    icerebilir -- bu, "degisiklik yapmasaydim ne olurdu" ile "gercekte en
+    son ne oldu" birbirine karisip kafa karistirabiliyordu. Gercek, bilinen
+    bir sayiyla kiyaslamak bu belirsizligi ortadan kaldirir ve senaryonun
+    NET etkisini daha yalin gosterir.
 
     Cikti degiskenleri SON DONEMdeki gercek degerinde SABIT tutulur --
     donem basinda karar verilebilecek bir sey olmadigi icin (bkz. senaryo_module.py
@@ -191,8 +200,9 @@ def senaryo_tahmin_et(model_paketi: dict, sonuc: dict, girdi_cols: list, cikti_c
 
     girdi_yuzdeleri: dict -- {girdi_adi: yuzde (orn. 0.10 = %10 artis, -0.10 = %10 azalis)}
 
-    Returns: dict -- taban_ortalama_MI (hicbir degisiklik olmasaydi modelin
-             tahmini), senaryo_ortalama_MI, degisim_yuzde, detay_df (DMU bazinda)
+    Returns: dict -- son_gercek_ortalama_MI (gecmiste GERCEKTEN olculen,
+             son gecisin ortalama MI'si), senaryo_ortalama_MI (modelin
+             sizin senaryonuz icin tahmini), degisim_yuzde, detay_df (DMU bazinda)
     """
     pipeline = model_paketi["pipeline"]
     son_donem = sonuc["veri"]["donem_sirali"][-1]
@@ -200,39 +210,39 @@ def senaryo_tahmin_et(model_paketi: dict, sonuc: dict, girdi_cols: list, cikti_c
     Y_son = sonuc["Y"][son_donem]
     dmu_sirali = sonuc["veri"]["dmu_sirali"]
 
-    taban_satirlari, senaryo_satirlari = [], []
+    # Son gecisin GERCEK (olculmus, tahmin edilmemis) MI degerleri
+    panel_df = sonuc["panel_df"]
+    son_gecis_zamani = sorted(panel_df.index.get_level_values("time").unique())[-1]
+    son_gercek_MI = panel_df.xs(son_gecis_zamani, level="time")["MI"]
+
+    senaryo_satirlari = []
     for dmu in dmu_sirali:
-        satir_taban, satir_senaryo = [], []
+        satir_senaryo = []
         for g in girdi_cols:
             deger = float(X_son.loc[dmu, g])
-            satir_taban.append(deger)
             yuzde = girdi_yuzdeleri.get(g, 0.0)
             satir_senaryo.append(deger * (1 + yuzde))
         for c in cikti_cols:
-            deger = float(Y_son.loc[dmu, c])
-            satir_taban.append(deger)
-            satir_senaryo.append(deger)
-        taban_satirlari.append(satir_taban)
+            satir_senaryo.append(float(Y_son.loc[dmu, c]))
         senaryo_satirlari.append(satir_senaryo)
 
-    taban_tahminleri = pipeline.predict(np.array(taban_satirlari))
     senaryo_tahminleri = pipeline.predict(np.array(senaryo_satirlari))
 
     detay = pd.DataFrame({
         "DMU": dmu_sirali,
-        "taban_tahmin_MI": np.round(taban_tahminleri, 4),
+        "son_gercek_MI": [round(float(son_gercek_MI.get(dmu, np.nan)), 4) for dmu in dmu_sirali],
         "senaryo_tahmin_MI": np.round(senaryo_tahminleri, 4),
     })
-    detay["degisim"] = (detay["senaryo_tahmin_MI"] - detay["taban_tahmin_MI"]).round(4)
+    detay["degisim"] = (detay["senaryo_tahmin_MI"] - detay["son_gercek_MI"]).round(4)
     detay = detay.set_index("DMU")
 
-    taban_ort = float(np.mean(taban_tahminleri))
+    son_gercek_ort = float(son_gercek_MI.mean())
     senaryo_ort = float(np.mean(senaryo_tahminleri))
 
     return {
-        "taban_ortalama_MI": round(taban_ort, 4),
+        "son_gercek_ortalama_MI": round(son_gercek_ort, 4),
         "senaryo_ortalama_MI": round(senaryo_ort, 4),
-        "degisim_yuzde": round((senaryo_ort - taban_ort) / taban_ort * 100, 2) if taban_ort else None,
+        "degisim_yuzde": round((senaryo_ort - son_gercek_ort) / son_gercek_ort * 100, 2) if son_gercek_ort else None,
         "detay_df": detay,
     }
 

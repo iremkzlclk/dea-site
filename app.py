@@ -911,7 +911,7 @@ if "sonuc" in st.session_state:
                     st.info(f"## Verimlilik tahmini: **%{degisim:+.1f}** (pratikte değişim yok)")
 
                 c1, c2 = st.columns(2)
-                c1.metric("Değişiklik yapılmasaydı (taban tahmin)", senaryo["taban_ortalama_MI"])
+                c1.metric("Son dönem gerçekleşen verimlilik (MI)", senaryo["son_gercek_ortalama_MI"])
                 c2.metric("Sizin senaryonuzla (yeni tahmin)", senaryo["senaryo_ortalama_MI"])
 
                 with st.expander("DMU (proje) bazında detay"):
