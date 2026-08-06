@@ -178,6 +178,43 @@ def ml_yorum_metni(model_paketi: dict, girdi_cols: list, cikti_cols: list) -> st
     return "\n".join(satirlar)
 
 
+def _girdi_cikti_betalari(sonuc: dict, girdi_cols: list, cikti_cols: list) -> dict:
+    """
+    Her (girdi, cikti) cifti icin, TUM DMU-donem gozlemleri havuzlanarak
+    (pooled) basit ikili regresyon egimini (beta = Cov(girdi,cikti)/Var(girdi))
+    hesaplar. senaryo_module.py'deki AYNI mantik -- ML tahmin sistemine de
+    tasindi (literatur tutarliligi icin, bkz. senaryo_tahmin_et docstring'i).
+
+    Returns: dict -- {(girdi, cikti): beta}
+    """
+    X, Y = sonuc["X"], sonuc["Y"]
+    donemler = sonuc["veri"]["donem_sirali"]
+    dmu_sirali = sonuc["veri"]["dmu_sirali"]
+
+    kayitlar = []
+    for donem in donemler:
+        for dmu in dmu_sirali:
+            satir = {}
+            for g in girdi_cols:
+                satir[g] = float(X[donem].loc[dmu, g])
+            for c in cikti_cols:
+                satir[c] = float(Y[donem].loc[dmu, c])
+            kayitlar.append(satir)
+    havuz = pd.DataFrame(kayitlar)
+
+    betalar = {}
+    for g in girdi_cols:
+        var_g = havuz[g].var(ddof=1)
+        for c in cikti_cols:
+            if var_g and var_g > 1e-12:
+                cov_gc = havuz[[g, c]].cov().iloc[0, 1]
+                beta = cov_gc / var_g
+            else:
+                beta = 0.0
+            betalar[(g, c)] = float(beta) if pd.notna(beta) else 0.0
+    return betalar
+
+
 def senaryo_tahmin_et(model_paketi: dict, sonuc: dict, girdi_cols: list, cikti_cols: list,
                        girdi_yuzdeleri: dict) -> dict:
     """
@@ -186,28 +223,31 @@ def senaryo_tahmin_et(model_paketi: dict, sonuc: dict, girdi_cols: list, cikti_c
     yeniden cozmeden, dogrudan modelin ogrendigi iliskiyi kullanarak
     (bu yuzden ANINDA sonuc verir).
 
+    CIKTI DEGISKENLERI ARTIK SAF SABIT TUTULMUYOR (onemli duzeltme):
+    Bir girdi degistiginde, o girdiyle TARIHSEL OLARAK KORELE olan cikti da,
+    aralarindaki basit dogrusal iliskiye (beta = Cov(girdi,cikti)/Var(girdi),
+    tum panelden hesaplanir) ORANTILI olarak KISMEN hareket eder -- senaryo_
+    module.py'deki (eski DEA tabanli sistem) AYNI mekanizma. Bunun nedeni
+    NEDENSEL CIKARIM literaturunde bilinen bir sorundur: eger cikti,
+    degistirdiginiz girdinin GERCEK bir SONUCUYSA (orn. "sure artinca
+    dogruluk da artar"), onu saf sekilde sabit tutmak "kotu kontrol" (bad
+    control / post-treatment bias) hatasina yol acar ve etkiyi OLDUGUNDAN
+    DUSUK gosterir (bkz. Angrist & Pischke, Mostly Harmless Econometrics).
+    Korelasyonu zayif olan cikti pratikte sabit kalir (beta~0); korelasyonu
+    guclu olan cikti ise girdiyle BIRLIKTE hareket eder. ONEMLI SINIRLAMA:
+    bu basit bir ikili (bivariate) yaklasimdir, tam nedensel bir model
+    DEGILDIR.
+
     IKI AYRI KARSILASTIRMA dondurulur -- bunlar FARKLI SORULARA cevap verir,
     birbirine KARISTIRILMAMALIDIR:
 
-    1) senaryo_etkisi_yuzde: SADECE sizin girdi degisikliginizin MARJINAL
-       etkisi -- modelin "hicbir sey degismeseydi ne tahmin ederdim" (kendi
-       sifir-degisim tahmini) ile "sizin senaryonuzla ne tahmin ederim"
-       arasindaki fark. DOGRUSAL modellerde (Ridge/Lasso/ElasticNet) bu
-       deger, panel katsayisinin isaretiyle HER ZAMAN tutarlidir -- bir
-       girdiyi artirmak ve azaltmak MATEMATIKSEL OLARAK ZIT YONDE sonuc
-       verir. "Bu girdiyi degistirmek ise yarar mi" sorusuna cevap budur.
+    1) senaryo_etkisi_yuzde: SADECE sizin girdi degisikliginizin (+ korele
+       ciktinin kismi tepkisinin) MARJINAL etkisi -- modelin "hicbir sey
+       degismeseydi ne tahmin ederdim" (kendi sifir-degisim tahmini) ile
+       "sizin senaryonuzla ne tahmin ederim" arasindaki fark.
 
     2) degisim_yuzde: senaryonuzun, GECMISTE GERCEKTEN GERCEKLESMIS (olculmus)
-       son donem MI degerine gore TOPLAM farki. Bu, hem sizin senaryonuzun
-       etkisini HEM DE modelin verinizde ogrendigi dogal trendi (orn. "MI
-       kendiliginden artiyor/azaliyor" egilimini) birlikte icerir -- bu
-       yuzden "artir" ve "azalt" senaryolari GERCEK degere gore AYNI YONDE
-       cikabilir (ikisi de dogal trendin altinda/ustunde kalabilir). "Bir
-       sonraki donem GENEL OLARAK nerede olacagim" sorusuna cevap budur.
-
-    Cikti degiskenleri SON DONEMdeki gercek degerinde SABIT tutulur --
-    donem basinda karar verilebilecek bir sey olmadigi icin (bkz. senaryo_module.py
-    ile ayni ilke).
+       son donem MI degerine gore TOPLAM farki (senaryo + dogal trend).
 
     girdi_yuzdeleri: dict -- {girdi_adi: yuzde (orn. 0.10 = %10 artis, -0.10 = %10 azalis)}
 
@@ -221,6 +261,7 @@ def senaryo_tahmin_et(model_paketi: dict, sonuc: dict, girdi_cols: list, cikti_c
     X_son = sonuc["X"][son_donem]
     Y_son = sonuc["Y"][son_donem]
     dmu_sirali = sonuc["veri"]["dmu_sirali"]
+    betalar = _girdi_cikti_betalari(sonuc, girdi_cols, cikti_cols)
 
     # Son gecisin GERCEK (olculmus, tahmin edilmemis) MI degerleri
     panel_df = sonuc["panel_df"]
@@ -230,15 +271,24 @@ def senaryo_tahmin_et(model_paketi: dict, sonuc: dict, girdi_cols: list, cikti_c
     taban_satirlari, senaryo_satirlari = [], []
     for dmu in dmu_sirali:
         satir_taban, satir_senaryo = [], []
+        girdi_deltalari = {}
         for g in girdi_cols:
             deger = float(X_son.loc[dmu, g])
             satir_taban.append(deger)
             yuzde = girdi_yuzdeleri.get(g, 0.0)
-            satir_senaryo.append(deger * (1 + yuzde))
+            yeni_deger = deger * (1 + yuzde)
+            satir_senaryo.append(yeni_deger)
+            girdi_deltalari[g] = yeni_deger - deger
         for c in cikti_cols:
             deger = float(Y_son.loc[dmu, c])
             satir_taban.append(deger)
-            satir_senaryo.append(deger)
+            # Korelasyon-bazli kismi hareket: degisen her girdinin
+            # katkisini (beta x delta_girdi) topla
+            toplam_delta_c = sum(
+                betalar[(g, c)] * girdi_deltalari[g] for g in girdi_cols
+                if abs(girdi_deltalari[g]) > 1e-9
+            )
+            satir_senaryo.append(max(deger + toplam_delta_c, 0.01))  # negatif/sifir engeli
         taban_satirlari.append(satir_taban)
         senaryo_satirlari.append(satir_senaryo)
 
