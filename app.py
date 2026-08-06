@@ -94,6 +94,62 @@ EXCEL_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 st.set_page_config(page_title="DEA + Malmquist + Panel Analizi", layout="wide")
+
+st.markdown("""
+<style>
+    /* Genel govde metni (paragraflar, aciklamalar) */
+    html, body, [class*="css"]  {
+        font-size: 18px !important;
+    }
+    /* Ana baslik */
+    h1 { font-size: 2.4rem !important; }
+    /* Alt basliklar (#### ile yazilanlar dahil) */
+    h2 { font-size: 1.9rem !important; }
+    h3 { font-size: 1.6rem !important; }
+    h4 { font-size: 1.35rem !important; }
+    h5 { font-size: 1.2rem !important; }
+    /* st.caption ile yazilan aciklama metinleri -- varsayilan cok kucuk kaliyor */
+    [data-testid="stCaptionContainer"], .stCaption, small {
+        font-size: 1.05rem !important;
+        line-height: 1.5 !important;
+    }
+    /* st.metric buyuk sayi ve etiketi */
+    [data-testid="stMetricValue"] {
+        font-size: 2.2rem !important;
+    }
+    [data-testid="stMetricLabel"] {
+        font-size: 1.1rem !important;
+    }
+    /* Tablo (st.dataframe) icindeki yazi */
+    [data-testid="stDataFrame"] * {
+        font-size: 1.05rem !important;
+    }
+    /* Sekme (tab) basliklari */
+    .stTabs [data-baseweb="tab"] {
+        font-size: 1.15rem !important;
+        padding: 10px 18px !important;
+    }
+    /* Butonlar */
+    .stButton button, .stDownloadButton button {
+        font-size: 1.1rem !important;
+        padding: 0.6rem 1.2rem !important;
+    }
+    /* Girdi kutulari, radio, selectbox etiketleri */
+    .stRadio label, .stSelectbox label, .stNumberInput label, .stTextInput label {
+        font-size: 1.05rem !important;
+    }
+    /* Genisletilebilir (expander) basliklari */
+    .streamlit-expanderHeader, [data-testid="stExpander"] summary {
+        font-size: 1.15rem !important;
+    }
+    /* Bilgi/uyari/basari kutulari (st.info/success/warning/error) */
+    [data-testid="stAlertContentInfo"], [data-testid="stAlertContentSuccess"],
+    [data-testid="stAlertContentWarning"], [data-testid="stAlertContentError"] {
+        font-size: 1.1rem !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 st.title("DEA + Gecikmeli Malmquist + Panel Veri Analizi")
 
 with st.expander("Excel sablonu nasil olmali?", expanded=False):
