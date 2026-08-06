@@ -12,7 +12,7 @@ from dea_module import min_dmu_kontrolu
 from panel_module import leave_one_out_kararlilik
 from pipeline import run_pipeline
 from backtest_module import backtest_calistir, rolling_backtest_calistir
-from ml_module import model_egit, ml_backtest_calistir, ml_rolling_backtest_calistir, ml_yorum_metni, senaryo_tahmin_et, MODEL_ACIKLAMALARI
+from ml_module import model_egit, ml_backtest_calistir, ml_rolling_backtest_calistir, ml_yorum_metni, senaryo_tahmin_et, en_iyi_modeli_sec, MODEL_ACIKLAMALARI
 from yorumlama import (
     malmquist_yorum_metni,
     malmquist_donem_ortalamasi,
@@ -812,47 +812,39 @@ if "sonuc" in st.session_state:
     with tab_ml:
         st.markdown("### 🔮 Gelecek Dönem Tahmini")
         st.markdown("""
-        **Bu sayfa ne yapar?** Aşağıda her girdi için bir kaydırıcı var. Kaydırıcıyı hareket
-        ettirdiğinizde ("bu girdiyi %X artırırsam/azaltırsam"), sistem bir sonraki dönem için
-        **verimliliğin ne kadar değişmesinin beklendiğini** anında hesaplayıp gösterir.
+        **Bu sayfa ne yapar?** Her girdi için **Artır/Azalt** seçip bir yüzde yazarsınız
+        ("bu girdiyi %X artırırsam/azaltırsam"). Sistem, geçmiş verinizden öğrenilmiş bir
+        modelle, bir sonraki dönem için **verimliliğin ne kadar değişmesinin beklendiğini**
+        hesaplar.
 
-        Bu tahmin, geçmiş verinizden **öğrenilmiş bir model** kullanılarak yapılır -- yani
-        "geçmişte bu girdi değiştiğinde verimlilik genelde nasıl değişti" örüntüsüne dayanır.
+        Model seçimini siz yapmıyorsunuz -- tıpkı Panel Analizi sekmesinde en uygun istatistiksel
+        modelin (Pooled/FE/RE) otomatik seçilmesi gibi, burada da **4 farklı tahmin modeli
+        arka planda denenip, geçmişi en isabetli tahmin eden otomatik seçilir.**
         """)
-
-        with st.expander("Modeli nasıl seçeyim? (isteğe bağlı, varsayılan zaten güvenli)"):
-            st.markdown("""
-            - **Ridge** (varsayılan, önerilen): Az veriyle bile güvenle çalışır, çoğu durumda en iyi seçim.
-            - **Lasso**: Ridge'e benzer, ama önemsiz görünen girdileri otomatik eler.
-            - **ElasticNet**: Ridge ile Lasso'nun ortası.
-            - **Random Forest**: Daha karmaşık bir model -- ⚠️ bu kadar az veriyle (60-100 gözlem)
-              yanılma riski yüksek, sadece merak için deneyin, sonuçlarına güvenmeyin.
-            """)
-
-        model_secim = st.selectbox(
-            "Model", options=["ridge", "lasso", "elasticnet", "random_forest"],
-            format_func=lambda x: {"ridge": "Ridge (önerilen)", "lasso": "Lasso",
-                                     "elasticnet": "ElasticNet",
-                                     "random_forest": "Random Forest (dikkatli yorumlayın)"}[x],
-            key="ml_model_secim",
-        )
 
         bagimsizlar_ml = girdi_cols + cikti_cols
 
         if st.button("Modeli Hazırla", type="primary", key="ml_calistir_btn"):
-            with st.spinner(f"Model eğitiliyor ve doğrulanıyor..."):
+            with st.spinner("4 farklı model deneniyor, geçmişi en iyi tahmin eden seçiliyor..."):
                 try:
-                    st.session_state["ml_sonuc"] = {
-                        "model_tipi": model_secim,
-                        "model_paketi": model_egit(sonuc["panel_df"], bagimsizlar_ml, model_secim),
-                        "backtest": ml_backtest_calistir(sonuc["panel_df"], bagimsizlar_ml, model_secim),
-                        "rolling": ml_rolling_backtest_calistir(sonuc["panel_df"], bagimsizlar_ml, model_secim),
-                        "hata": None,
-                    }
+                    secim = en_iyi_modeli_sec(sonuc["panel_df"], bagimsizlar_ml)
+                    if not secim["basarili"]:
+                        st.session_state["ml_sonuc"] = {"hata": secim["mesaj"]}
+                    else:
+                        model_secim = secim["secilen_model"]
+                        st.session_state["ml_sonuc"] = {
+                            "model_tipi": model_secim,
+                            "secim_gerekce": secim["gerekce"],
+                            "secim_karsilastirma": secim["karsilastirma_df"],
+                            "model_paketi": model_egit(sonuc["panel_df"], bagimsizlar_ml, model_secim),
+                            "backtest": ml_backtest_calistir(sonuc["panel_df"], bagimsizlar_ml, model_secim),
+                            "rolling": ml_rolling_backtest_calistir(sonuc["panel_df"], bagimsizlar_ml, model_secim),
+                            "hata": None,
+                        }
                 except Exception as e:
-                    st.session_state["ml_sonuc"] = {"model_tipi": model_secim, "hata": str(e)}
+                    st.session_state["ml_sonuc"] = {"hata": str(e)}
 
-        if "ml_sonuc" in st.session_state and st.session_state["ml_sonuc"]["model_tipi"] == model_secim:
+        if "ml_sonuc" in st.session_state:
             ml = st.session_state["ml_sonuc"]
 
             if ml.get("hata"):
@@ -861,16 +853,48 @@ if "sonuc" in st.session_state:
                 mp = ml["model_paketi"]
 
                 st.write("---")
+                st.success(f"✅ {ml['secim_gerekce']}")
+                with st.expander("4 modelin karşılaştırması (şeffaflık için)"):
+                    st.dataframe(ml["secim_karsilastirma"], use_container_width=True, hide_index=True)
+                    st.caption(
+                        "Bazı modellerde (özellikle Lasso/ElasticNet) bir girdinin etkisi TAM SIFIR "
+                        "çıkabilir -- bu durumda o girdiyi ne kadar değiştirirseniz değiştirin tahmin "
+                        "hiç değişmez. Bu bir hata değil, modelin 'bu girdinin etkisi güvenilir değil' "
+                        "demesinin bir yoludur. Otomatik seçim, böyle bir riski taşıyan modelleri elemeye çalışır."
+                    )
+
+                st.write("---")
                 st.markdown("#### 🎛️ Girdilerinizi Ayarlayın")
-                st.caption("Her kaydırıcı, o girdiyi bir sonraki dönem için ne kadar artırıp azaltacağınızı temsil eder. Çıktılar (doğruluk, prototip sayısı vb.) sabit tutulur -- çünkü bunlar sizin karar verebileceğiniz şeyler değil, dönem sonunda ortaya çıkan sonuçlardır.")
+                st.caption(
+                    "Her girdi için yön (Artır/Azalt) seçip yüzdeyi yazın. Çıktılar (doğruluk, "
+                    "prototip sayısı vb.) sabit tutulur -- çünkü bunlar sizin karar verebileceğiniz "
+                    "şeyler değil, dönem sonunda ortaya çıkan sonuçlardır."
+                )
 
                 girdi_yuzdeleri = {}
                 for g in girdi_cols:
-                    yuzde_secim = st.slider(
-                        g, min_value=-30, max_value=30, value=0, step=1,
-                        format="%d%%", key=f"ml_slider_{g}",
-                    )
-                    girdi_yuzdeleri[g] = yuzde_secim / 100.0
+                    with st.container(border=True):
+                        st.write(f"**{g}**")
+                        cc1, cc2 = st.columns([1, 1])
+                        with cc1:
+                            yon_secim = st.radio(
+                                "Yön", ["Değiştirme", "Artır", "Azalt"], index=0,
+                                key=f"ml_yon_{g}", horizontal=True,
+                            )
+                        with cc2:
+                            if yon_secim != "Değiştirme":
+                                yuzde_deger = st.number_input(
+                                    "Yüzde (%)", min_value=0.0, max_value=100.0, value=10.0, step=1.0,
+                                    key=f"ml_yuzde_{g}",
+                                )
+                            else:
+                                yuzde_deger = 0.0
+                        if yon_secim == "Artır":
+                            girdi_yuzdeleri[g] = yuzde_deger / 100.0
+                        elif yon_secim == "Azalt":
+                            girdi_yuzdeleri[g] = -yuzde_deger / 100.0
+                        else:
+                            girdi_yuzdeleri[g] = 0.0
 
                 senaryo = senaryo_tahmin_et(mp, sonuc, girdi_cols, cikti_cols, girdi_yuzdeleri)
 
@@ -878,7 +902,7 @@ if "sonuc" in st.session_state:
                 st.markdown("#### 📈 Tahmini Sonuç")
                 degisim = senaryo["degisim_yuzde"]
                 if all(v == 0 for v in girdi_yuzdeleri.values()):
-                    st.info("Henüz bir kaydırıcıyı hareket ettirmediniz -- yukarıdaki kaydırıcılardan birini değiştirin.")
+                    st.info("Henüz bir girdi için Artır/Azalt seçmediniz -- yukarıdan seçim yapın.")
                 elif degisim is not None and degisim > 0.5:
                     st.success(f"## ✅ Verimlilik tahmini: **%{degisim:+.1f}** değişir (artış)")
                 elif degisim is not None and degisim < -0.5:
@@ -894,7 +918,7 @@ if "sonuc" in st.session_state:
                     st.dataframe(senaryo["detay_df"], use_container_width=True)
                     st.download_button(
                         "Detayı Excel indir", excel_indirme_verisi(senaryo["detay_df"]),
-                        file_name=f"gelecek_tahmini_{model_secim}.xlsx", mime=EXCEL_MIME, key="ml_senaryo_csv_dl",
+                        file_name=f"gelecek_tahmini_{ml['model_tipi']}.xlsx", mime=EXCEL_MIME, key="ml_senaryo_csv_dl",
                     )
 
                 st.write("---")

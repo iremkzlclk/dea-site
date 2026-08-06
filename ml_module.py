@@ -362,3 +362,59 @@ def ml_rolling_backtest_calistir(panel_df: pd.DataFrame, bagimsizlar: list, mode
             "kat_basina_naiften_iyi_sayisi": sum(1 for k in kat_detaylari if k["metrikler"]["modelin_naiften_iyi_mi"]),
         },
     }
+
+
+def en_iyi_modeli_sec(panel_df: pd.DataFrame, bagimsizlar: list, bagimli: str = "MI") -> dict:
+    """
+    Panel Analizi sekmesindeki model-secim mantigina (Poolability->Hausman->SE
+    zinciri) benzer sekilde: 4 ML modelinin (ridge/lasso/elasticnet/random_forest)
+    HEPSINI backtest'ten gecirir ve GECMISI EN IYI TAHMIN EDEN modeli otomatik
+    secer -- boylece kullanicinin 4 model arasinda KENDI SECIM YAPMASI gerekmez.
+
+    Secim kriteri: once Rolling Backtest (varsa) ortalama YON DOGRULUGU'nu
+    (yuksek=iyi) esas alir -- bu sekmenin amaci (girdiyi artir/azalt
+    kararı) icin en pratik olcut budur; esitlik durumunda ortalama MAE
+    (dusuk=iyi) ile tiebreak yapilir. Rolling yeterli veri sunmuyorsa
+    tek-katli backtest metriklerine dusulur.
+
+    Returns: dict -- secilen_model (str), gerekce (str, kullaniciya gosterilecek
+             aciklama), karsilastirma_df (DataFrame, 4 modelin yan yana
+             metrikleri -- seffaflik icin)
+    """
+    adaylar = []
+    for model_tipi in ["ridge", "lasso", "elasticnet", "random_forest"]:
+        rbt = ml_rolling_backtest_calistir(panel_df, bagimsizlar, model_tipi, bagimli)
+        if rbt["yeterli_veri"]:
+            mae = rbt["ortalama_metrikler"]["MAE_ortalama"]
+            yon = rbt["ortalama_metrikler"]["yon_dogruluk_ortalama_%"]
+            kaynak = "rolling"
+        else:
+            bt = ml_backtest_calistir(panel_df, bagimsizlar, model_tipi, bagimli)
+            if not bt["yeterli_veri"]:
+                continue
+            mae = bt["metrikler"]["MAE"]
+            yon = bt["metrikler"]["yon_dogruluk_%"]
+            kaynak = "tek-katli"
+        adaylar.append({"model": model_tipi, "MAE": mae, "yon_dogruluk_%": yon, "kaynak": kaynak})
+
+    if not adaylar:
+        return {
+            "basarili": False,
+            "mesaj": "Hicbir model icin yeterli veri bulunamadi (cok kisa panel).",
+        }
+
+    karsilastirma_df = pd.DataFrame(adaylar).sort_values(
+        ["yon_dogruluk_%", "MAE"], ascending=[False, True]
+    ).reset_index(drop=True)
+
+    secilen = karsilastirma_df.iloc[0]
+    gerekce = (
+        f"**{secilen['model'].upper()}** seçildi -- geçmiş dönemleri tahmin etmede "
+        f"({secilen['kaynak']} backtest) diğer {len(adaylar)-1} modelden daha isabetliydi "
+        f"(MAE={secilen['MAE']}, yön doğruluğu=%{secilen['yon_dogruluk_%']})."
+    )
+
+    return {
+        "basarili": True, "secilen_model": secilen["model"],
+        "gerekce": gerekce, "karsilastirma_df": karsilastirma_df,
+    }
