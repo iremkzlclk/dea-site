@@ -12,7 +12,7 @@ from dea_module import min_dmu_kontrolu
 from panel_module import leave_one_out_kararlilik
 from pipeline import run_pipeline
 from backtest_module import backtest_calistir, rolling_backtest_calistir
-from ml_module import model_egit, ml_backtest_calistir, ml_rolling_backtest_calistir, MODEL_ACIKLAMALARI
+from ml_module import model_egit, ml_backtest_calistir, ml_rolling_backtest_calistir, ml_yorum_metni, MODEL_ACIKLAMALARI
 from yorumlama import (
     malmquist_yorum_metni,
     malmquist_donem_ortalamasi,
@@ -812,25 +812,24 @@ if "sonuc" in st.session_state:
     with tab_ml:
         st.markdown("### 🤖 Makine Öğrenmesi ile Tahmin")
         st.markdown("""
-        Panel Analizi sekmesi size **"neden"** sorusuna (istatistiksel çıkarım, hipotez testi)
-        cevap verir. Bu sekme ise **"ne olacak"** sorusuna -- doğrudan gelecek dönem tahmini için
-        optimize edilmiş -- bir cevap sunar.
+        **Bu sekme ne işe yarar?** Panel Analizi sekmesi size "hangi değişken MI ile ilişkili"
+        sorusunu, klasik istatistik testleriyle (p-değeri gibi) cevaplıyordu. Bu sekme ise aynı
+        soruyu, **doğrudan "gelecek dönemi en iyi nasıl tahmin ederim" hedefiyle eğitilmiş**
+        modellerle cevaplıyor -- ve size hangi girdiye yatırım yaparsanız MI'nin ne yönde
+        değişmesinin beklendiğini **doğrudan yorum olarak** gösteriyor (aşağıdaki "💬 Yorum"
+        bölümüne bakın).
 
-        **Düzenlileştirilmiş (regularized) regresyon** modelleri -- Ridge, Lasso, ElasticNet --
-        kullanılıyor. Ayrıca karşılaştırma için sıkı sınırlandırılmış bir Random Forest de sunulur.
+        **Kullanabileceğiniz 4 model var**, her biri farklı bir mantıkla çalışır -- aşağıdaki
+        açılır menüden seçtiğinizde kısa açıklaması görünecek. Kabaca:
+        - **Ridge / Lasso / ElasticNet:** Bunlar "temkinli" modellerdir -- az veriyle bile
+          güvenle çalışırlar, önerilen birincil seçenekler bunlardır.
+        - **Random Forest:** Daha "iddialı" bir modeldir, ama az veride yanılma riski yüksektir
+          -- sadece karşılaştırma amaçlı bulunuyor, tek başına güvenmeyin.
 
-        ⚠️ **Neden Random Forest / Gradient Boosting / Neural Network birincil seçenek değil:**
-        Bu yöntemler genelde yüzlerce-binlerce gözlem gerektirir. Sizin veri büyüklüğünüzde
-        (N~12-15 DMU × T~6-8 dönem ≈ 60-100 gözlem), bu modeller eğitim verisini ezberler
-        (overfit) ve gerçekte panel regresyonundan **daha kötü** tahmin eder.
-
-        **Panel regresyonundan farkı:** (1) çapraz doğrulamayla doğrudan tahmin hatası için
-        optimize edilir -- panel modelin optimize ettiği "tarafsız çıkarım" hedefinden farklı;
-        (2) çoklu doğrusal bağlantıya (VIF) karşı daha dayanıklı, Lasso zayıf değişkenleri
-        otomatik eler. **Kaybettiğiniz şey:** p-değeri/anlamlılık testi yok (sadece katsayı
-        büyüklüğü/yönü), ve panelinizde Sabit Etkiler (FE) seçildiyse bu modeller DMU'lar
-        arası zaman-değişmez farkları ayrıca kontrol etmiyor -- panelle bire bir adil bir
-        kıyaslama olmayabilir.
+        ⚠️ Neden karmaşık modeller (Random Forest, yapay sinir ağı vb.) birincil seçenek değil:
+        Bu modeller genelde yüzlerce-binlerce veri noktası ister. Sizin veri büyüklüğünüzde
+        (yaklaşık 60-100 gözlem), bu modeller veriyi "ezberler" ve gerçekte daha kötü tahmin
+        eder -- bu yüzden basit ama güvenilir modelleri (Ridge/Lasso/ElasticNet) öne çıkarıyoruz.
 
         Tüm modeller, **Backtest sekmesiyle birebir aynı** doğrulama çerçevesini kullanır --
         böylece klasik panel regresyonuyla doğrudan, adil bir kıyaslama yapabilirsiniz.
@@ -861,10 +860,19 @@ if "sonuc" in st.session_state:
 
             st.write("---")
             st.markdown("#### Model Katsayıları / Özellik Önemleri")
+            st.caption(
+                "**katsayi_gercek_olcek** sütunu: değişken 1 birim arttığında MI'nin ortalama ne kadar "
+                "değişmesi beklendiğini gösterir (yorumlanabilir, gerçek ölçekte). **katsayi_standart** "
+                "sütunu ise değişkenler arası göreli önemi karşılaştırmak içindir, doğrudan yorumlanmaz."
+            )
             mp = ml["model_paketi"]
             st.dataframe(mp["katsayilar"], use_container_width=True)
             if mp["secilen_alpha"] is not None:
                 st.caption(f"Çapraz doğrulamayla seçilen düzenlileştirme gücü (alpha): {mp['secilen_alpha']:.4g}")
+
+            st.write("---")
+            st.markdown("#### 💬 Yorum -- Hangi Girdiye Yatırım Yapmalıyım?")
+            st.markdown(ml_yorum_metni(mp, girdi_cols, cikti_cols))
 
             st.write("---")
             st.markdown("#### Tek Katlı Backtest (ML Modeli)")

@@ -33,11 +33,17 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 
 MODEL_ACIKLAMALARI = {
-    "ridge": "Ridge (L2 duzenlilestirme) -- kucuk-N icin guvenli, coklu dogrusal baglantiya dayanikli.",
-    "lasso": "Lasso (L1 duzenlilestirme) -- zayif degiskenlerin katsayisini SIFIRA cekerek otomatik degisken secimi yapar.",
-    "elasticnet": "ElasticNet (L1+L2 karisimi) -- Ridge ve Lasso'nun dengeli bir birlesimi.",
-    "random_forest": "Random Forest (agir sinirlandirilmis) -- KARSILASTIRMA AMACLI; bu veri buyuklugunde "
-                      "asiri ogrenme (overfit) riski yuksektir, sonuclarini temkinli yorumlayin.",
+    "ridge": "**Ridge:** Tüm girdi/çıktıları hesaba katar, hiçbirini tamamen göz ardı etmez -- "
+             "aralarında güçlü bir ilişki (çoklu doğrusal bağlantı) varsa bile kararlı sonuç verir. "
+             "Az veriyle güvenle kullanılabilir.",
+    "lasso": "**Lasso:** Zayıf/önemsiz görünen girdi-çıktıların etkisini otomatik olarak SIFIRA çeker "
+             "-- yani size 'bunlar önemli değil' diye otomatik bir eleme de yapar.",
+    "elasticnet": "**ElasticNet:** Ridge ile Lasso'nun ortası -- hem kararlı sonuç verir hem de "
+                  "önemsiz değişkenleri kısmen eler.",
+    "random_forest": "**Random Forest:** Karar ağaçlarından oluşan, doğrusal olmayan ilişkileri de "
+                      "yakalayabilen bir model. ⚠️ Sadece KARŞILAŞTIRMA amaçlı sunuluyor -- bu kadar "
+                      "az veriyle (60-100 gözlem) ezberleme riski yüksek, sonuçlarına diğerleri kadar "
+                      "güvenmeyin.",
 }
 
 
@@ -48,9 +54,14 @@ def _model_kur(model_tipi: str):
         alfa_araligi = np.logspace(-3, 3, 50)
         regresor = RidgeCV(alphas=alfa_araligi, cv=None)  # cv=None -> LOOCV (kucuk N icin en uygun)
     elif model_tipi == "lasso":
-        regresor = LassoCV(cv=5, max_iter=20000, n_alphas=50)
+        # NOT: scikit-learn 1.9+ 'n_alphas' parametresini kaldirdi -- artik 'alphas'
+        # parametresi hem tam sayi (eskiden n_alphas'in yaptigi gibi otomatik uretim
+        # sayisi) hem de liste (belirli degerler) kabul ediyor. Bu yuzden 'alphas=50'
+        # kullaniyoruz, 'n_alphas=50' DEGIL (eski sklearn surumlerinde calisirdi,
+        # 1.9+'da TypeError verir).
+        regresor = LassoCV(cv=5, max_iter=20000, alphas=50)
     elif model_tipi == "elasticnet":
-        regresor = ElasticNetCV(cv=5, max_iter=20000, n_alphas=50, l1_ratio=[.1, .3, .5, .7, .9, .95, .99])
+        regresor = ElasticNetCV(cv=5, max_iter=20000, alphas=50, l1_ratio=[.1, .3, .5, .7, .9, .95, .99])
     elif model_tipi == "random_forest":
         # Agir sinirlandirma: sig agaclar, yuksek min_samples_leaf -- overfit riskini azaltmak icin
         regresor = RandomForestRegressor(
@@ -79,10 +90,18 @@ def model_egit(panel_df: pd.DataFrame, bagimsizlar: list, model_tipi: str, bagim
 
     regresor = pipeline.named_steps["model"]
     if model_tipi in ("ridge", "lasso", "elasticnet"):
+        std_katsayilar = regresor.coef_
+        # OLCEKLENMIS (standardize edilmis) katsayilar dogrudan "1 birim degisince
+        # ne olur" diye yorumlanamaz -- StandardScaler'in olcek faktoruyle (std)
+        # bolerek GERCEK OLCEGE (orijinal birimlere) ceviriyoruz.
+        olcekleyici = pipeline.named_steps["olcekleme"]
+        ham_katsayilar = std_katsayilar / olcekleyici.scale_
+
         katsayilar = pd.DataFrame({
-            "degisken": bagimsizlar, "katsayi": regresor.coef_,
+            "degisken": bagimsizlar, "katsayi_standart": std_katsayilar, "katsayi_gercek_olcek": ham_katsayilar,
         }).set_index("degisken")
-        katsayilar["katsayi"] = katsayilar["katsayi"].round(5)
+        katsayilar["katsayi_standart"] = katsayilar["katsayi_standart"].round(5)
+        katsayilar["katsayi_gercek_olcek"] = katsayilar["katsayi_gercek_olcek"].round(6)
         secilen_alpha = getattr(regresor, "alpha_", None)
     else:  # random_forest
         katsayilar = pd.DataFrame({
@@ -95,6 +114,67 @@ def model_egit(panel_df: pd.DataFrame, bagimsizlar: list, model_tipi: str, bagim
         "pipeline": pipeline, "katsayilar": katsayilar, "model_tipi": model_tipi,
         "secilen_alpha": secilen_alpha, "aciklama": MODEL_ACIKLAMALARI[model_tipi],
     }
+
+
+def ml_yorum_metni(model_paketi: dict, girdi_cols: list, cikti_cols: list) -> str:
+    """
+    Katsayilari/ozellik onemlerini, konuyu hic bilmeyen bir kullanicinin
+    anlayacagi, DOGRUDAN AKSIYONA donusturulebilir bir yorum metnine cevirir.
+    Buyukluge (mutlak deger) gore siralanmis, en etkili degiskenden baslar.
+    """
+    model_tipi = model_paketi["model_tipi"]
+    katsayilar = model_paketi["katsayilar"]
+
+    satirlar = [f"**Model: {model_tipi.upper()}** -- MI (verimlilik endeksi) üzerindeki etkiler, "
+                f"en güçlüden en zayıfa doğru sıralandı:\n"]
+
+    if model_tipi in ("ridge", "lasso", "elasticnet"):
+        siralama = katsayilar.reindex(
+            katsayilar["katsayi_standart"].abs().sort_values(ascending=False).index
+        )
+        for degisken, satir in siralama.iterrows():
+            ham = satir["katsayi_gercek_olcek"]
+            tip = "Girdi" if degisken in girdi_cols else "Çıktı"
+            if abs(satir["katsayi_standart"]) < 1e-6:
+                satirlar.append(
+                    f"- **{degisken}** ({tip}): Model bu değişkenin etkisini **sıfıra çekti** -- "
+                    f"yani MI'yi açıklamada işe yaramadığını tespit etti. Bu değişkene dayanarak "
+                    f"aksiyon almanızı önermiyoruz."
+                )
+                continue
+            yon = "artırır" if ham > 0 else "azaltır"
+            satirlar.append(
+                f"- **{degisken}** ({tip}): Bu değişken **1 birim arttığında**, MI'nin ortalama "
+                f"**{ham:+.5f} birim** değişmesi bekleniyor -- yani bu değişkeni artırmak MI'yi "
+                f"**{yon}**."
+            )
+        if girdi_cols:
+            en_guclu_girdi = None
+            for degisken, satir in siralama.iterrows():
+                if degisken in girdi_cols and abs(satir["katsayi_standart"]) > 1e-6:
+                    en_guclu_girdi = (degisken, satir["katsayi_gercek_olcek"])
+                    break
+            if en_guclu_girdi:
+                deg, ham = en_guclu_girdi
+                yon_metni = "artırmayı" if ham > 0 else "azaltmayı"
+                satirlar.append(
+                    f"\n**Özet:** Modele göre, verimliliği artırmak için en güçlü kaldıraç "
+                    f"**{deg}**'i **{yon_metni}** denemek olabilir. ⚠️ Bu, panel analizindeki DEA-"
+                    f"tutarlılık kontrolüyle birlikte değerlendirilmeli -- tek başına kesin bir "
+                    f"yatırım kararı için yeterli değildir."
+                )
+    else:  # random_forest
+        siralama = katsayilar.sort_values("ozellik_onemi", ascending=False)
+        for degisken, satir in siralama.iterrows():
+            tip = "Girdi" if degisken in girdi_cols else "Çıktı"
+            satirlar.append(
+                f"- **{degisken}** ({tip}): Modelin tahmininde **%{satir['ozellik_onemi']*100:.1f}** "
+                f"oranında rol oynuyor. ⚠️ Random Forest **yön** (artış/azalış) bilgisi vermez, "
+                f"sadece 'ne kadar önemli' bilgisi verir -- ve bu veri büyüklüğünde bu önem "
+                f"sıralaması da güvenilmez olabilir."
+            )
+
+    return "\n".join(satirlar)
 
 
 def _tek_kat_ml(panel_df: pd.DataFrame, egitim_zamanlari: list, test_zamani,
