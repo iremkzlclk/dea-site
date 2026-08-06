@@ -12,6 +12,7 @@ from dea_module import min_dmu_kontrolu
 from panel_module import leave_one_out_kararlilik
 from pipeline import run_pipeline
 from backtest_module import backtest_calistir, rolling_backtest_calistir
+from ml_module import model_egit, ml_backtest_calistir, ml_rolling_backtest_calistir, MODEL_ACIKLAMALARI
 from yorumlama import (
     malmquist_yorum_metni,
     malmquist_donem_ortalamasi,
@@ -170,7 +171,7 @@ if uploaded is not None:
             # DMU/donem setine sahip yeni bir dosya yuklendiginde, eski sonuclar (gelecek
             # senaryosu, backtest, kararlilik testi) yeni DMU/degisken listesiyle uyusmayip
             # KeyError'a yol acabilir (secim kutulari yeni veriden, sonuc eskisinden gelir).
-            for eski_anahtar in ["backtest", "rolling_backtest", "kararlilik"]:
+            for eski_anahtar in ["backtest", "rolling_backtest", "kararlilik", "ml_sonuc"]:
                 st.session_state.pop(eski_anahtar, None)
 
     except VeriDogrulamaHatasi as e:
@@ -183,8 +184,8 @@ if "sonuc" in st.session_state:
     girdi_cols = sonuc["veri"]["girdi_cols"]
     cikti_cols = sonuc["veri"]["cikti_cols"]
 
-    tab_dea, tab_malmquist, tab_panel, tab_backtest = st.tabs(
-        ["DEA Sonuclari", "Malmquist Sonuclari", "Panel Analizi", "Backtest (Model Dogrulama)"]
+    tab_dea, tab_malmquist, tab_panel, tab_backtest, tab_ml = st.tabs(
+        ["DEA Sonuclari", "Malmquist Sonuclari", "Panel Analizi", "Backtest (Model Dogrulama)", "ML Tahmin"]
     )
 
     with tab_dea:
@@ -808,3 +809,102 @@ if "sonuc" in st.session_state:
 
 
 
+    with tab_ml:
+        st.markdown("### 🤖 Makine Öğrenmesi ile Tahmin")
+        st.markdown("""
+        Panel Analizi sekmesi size **"neden"** sorusuna (istatistiksel çıkarım, hipotez testi)
+        cevap verir. Bu sekme ise **"ne olacak"** sorusuna -- doğrudan gelecek dönem tahmini için
+        optimize edilmiş -- bir cevap sunar.
+
+        **Düzenlileştirilmiş (regularized) regresyon** modelleri -- Ridge, Lasso, ElasticNet --
+        kullanılıyor. Ayrıca karşılaştırma için sıkı sınırlandırılmış bir Random Forest de sunulur.
+
+        ⚠️ **Neden Random Forest / Gradient Boosting / Neural Network birincil seçenek değil:**
+        Bu yöntemler genelde yüzlerce-binlerce gözlem gerektirir. Sizin veri büyüklüğünüzde
+        (N~12-15 DMU × T~6-8 dönem ≈ 60-100 gözlem), bu modeller eğitim verisini ezberler
+        (overfit) ve gerçekte panel regresyonundan **daha kötü** tahmin eder.
+
+        **Panel regresyonundan farkı:** (1) çapraz doğrulamayla doğrudan tahmin hatası için
+        optimize edilir -- panel modelin optimize ettiği "tarafsız çıkarım" hedefinden farklı;
+        (2) çoklu doğrusal bağlantıya (VIF) karşı daha dayanıklı, Lasso zayıf değişkenleri
+        otomatik eler. **Kaybettiğiniz şey:** p-değeri/anlamlılık testi yok (sadece katsayı
+        büyüklüğü/yönü), ve panelinizde Sabit Etkiler (FE) seçildiyse bu modeller DMU'lar
+        arası zaman-değişmez farkları ayrıca kontrol etmiyor -- panelle bire bir adil bir
+        kıyaslama olmayabilir.
+
+        Tüm modeller, **Backtest sekmesiyle birebir aynı** doğrulama çerçevesini kullanır --
+        böylece klasik panel regresyonuyla doğrudan, adil bir kıyaslama yapabilirsiniz.
+        """)
+
+        model_secim = st.selectbox(
+            "Model seçin", options=["ridge", "lasso", "elasticnet", "random_forest"],
+            format_func=lambda x: {"ridge": "Ridge (L2)", "lasso": "Lasso (L1)",
+                                     "elasticnet": "ElasticNet (L1+L2)",
+                                     "random_forest": "Random Forest (dikkatli yorumlayın)"}[x],
+            key="ml_model_secim",
+        )
+        st.caption(MODEL_ACIKLAMALARI[model_secim])
+
+        bagimsizlar_ml = girdi_cols + cikti_cols
+
+        if st.button("ML Modelini Çalıştır", type="primary", key="ml_calistir_btn"):
+            with st.spinner(f"{model_secim} modeli eğitiliyor ve doğrulanıyor..."):
+                st.session_state["ml_sonuc"] = {
+                    "model_tipi": model_secim,
+                    "model_paketi": model_egit(sonuc["panel_df"], bagimsizlar_ml, model_secim),
+                    "backtest": ml_backtest_calistir(sonuc["panel_df"], bagimsizlar_ml, model_secim),
+                    "rolling": ml_rolling_backtest_calistir(sonuc["panel_df"], bagimsizlar_ml, model_secim),
+                }
+
+        if "ml_sonuc" in st.session_state and st.session_state["ml_sonuc"]["model_tipi"] == model_secim:
+            ml = st.session_state["ml_sonuc"]
+
+            st.write("---")
+            st.markdown("#### Model Katsayıları / Özellik Önemleri")
+            mp = ml["model_paketi"]
+            st.dataframe(mp["katsayilar"], use_container_width=True)
+            if mp["secilen_alpha"] is not None:
+                st.caption(f"Çapraz doğrulamayla seçilen düzenlileştirme gücü (alpha): {mp['secilen_alpha']:.4g}")
+
+            st.write("---")
+            st.markdown("#### Tek Katlı Backtest (ML Modeli)")
+            bt = ml["backtest"]
+            if not bt["yeterli_veri"]:
+                st.error(bt["mesaj"])
+            else:
+                m = bt["metrikler"]
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Ortalama hata (MAE)", m["MAE"])
+                c2.metric("Büyük hata cezası (RMSE)", m["RMSE"])
+                c3.metric("Yüzdesel hata (MAPE)", f"%{m['MAPE_%']}")
+                c4.metric("Yön doğruluğu", f"%{m['yon_dogruluk_%']}")
+                if m["modelin_naiften_iyi_mi"]:
+                    st.success(f"✅ ML modelinin MAE'si ({m['MAE']}), naif tahminden ({m['naif_baseline_MAE']}) daha düşük.")
+                else:
+                    st.warning(f"⚠️ ML modelinin MAE'si ({m['MAE']}), naif tahminden ({m['naif_baseline_MAE']}) daha yüksek veya eşit.")
+
+            st.write("---")
+            st.markdown("#### Rolling Backtest (ML Modeli)")
+            rbt = ml["rolling"]
+            if not rbt["yeterli_veri"]:
+                st.error(rbt["mesaj"])
+            else:
+                om = rbt["ortalama_metrikler"]
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Ortalama MAE", om["MAE_ortalama"], help=f"Katlar arası std: {om['MAE_std']}")
+                c2.metric("Ortalama Yön Doğruluğu", f"%{om['yon_dogruluk_ortalama_%']}", help=f"Katlar arası std: %{om['yon_dogruluk_std']}")
+                c3.metric("Naiften iyi olan kat sayısı", f"{om['kat_basina_naiften_iyi_sayisi']}/{rbt['kat_sayisi']}")
+
+                st.markdown("##### 📊 Panel Regresyonu ile Karşılaştırma")
+                st.caption(
+                    "Aynı metrikleri Backtest sekmesindeki klasik panel regresyonu sonuçlarıyla "
+                    "karşılaştırarak, ML modelinin gerçekten ek bir değer katıp katmadığını görebilirsiniz "
+                    "-- Backtest sekmesini de çalıştırdıysanız oradaki 'Ortalama MAE' ve 'Ortalama Yön "
+                    "Doğruluğu' değerleriyle yukarıdakileri yan yana koyun."
+                )
+
+                st.download_button(
+                    "ML rolling backtest sonucunu Excel indir",
+                    excel_indirme_verisi(pd.DataFrame([k["metrikler"] for k in rbt["kat_detaylari"]])),
+                    file_name=f"ml_backtest_{model_secim}.xlsx", mime=EXCEL_MIME, key="ml_csv_dl",
+                )

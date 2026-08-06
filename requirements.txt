@@ -7,3 +7,4 @@ linearmodels
 statsmodels
 scipy
 openpyxl
+scikit-learn
