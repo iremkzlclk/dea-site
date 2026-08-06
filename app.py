@@ -900,19 +900,40 @@ if "sonuc" in st.session_state:
 
                 st.write("---")
                 st.markdown("#### 📈 Tahmini Sonuç")
-                degisim = senaryo["degisim_yuzde"]
+
                 if all(v == 0 for v in girdi_yuzdeleri.values()):
                     st.info("Henüz bir girdi için Artır/Azalt seçmediniz -- yukarıdan seçim yapın.")
-                elif degisim is not None and degisim > 0.5:
-                    st.success(f"## ✅ Verimlilik tahmini: **%{degisim:+.1f}** değişir (artış)")
-                elif degisim is not None and degisim < -0.5:
-                    st.warning(f"## ⚠️ Verimlilik tahmini: **%{degisim:+.1f}** değişir (azalış)")
                 else:
-                    st.info(f"## Verimlilik tahmini: **%{degisim:+.1f}** (pratikte değişim yok)")
+                    etki = senaryo["senaryo_etkisi_yuzde"]
+                    st.markdown("##### 1) Yaptığınız değişikliğin NET etkisi")
+                    st.caption(
+                        "Sadece sizin Artır/Azalt seçiminizin etkisi -- diğer her şey sabit "
+                        "tutulsaydı bu değişiklik verimliliği ne kadar değiştirirdi. Bu sayı, "
+                        "Panel Analizi sekmesindeki katsayı yönüyle her zaman tutarlıdır."
+                    )
+                    if etki is not None and etki > 0.5:
+                        st.success(f"## ✅ %{etki:+.1f} (bu değişiklik verimliliği artırır)")
+                    elif etki is not None and etki < -0.5:
+                        st.warning(f"## ⚠️ %{etki:+.1f} (bu değişiklik verimliliği azaltır)")
+                    else:
+                        st.info(f"## %{etki:+.1f} (pratikte etkisi yok)")
 
-                c1, c2 = st.columns(2)
+                    st.write("")
+                    st.markdown("##### 2) Bir sonraki dönem GENEL OLARAK nerede olacaksınız")
+                    st.caption(
+                        "Bu, hem sizin değişikliğinizi HEM DE verinizdeki doğal eğilimi (geçmişte "
+                        "MI'nin kendiliğinden artma/azalma eğilimini) birlikte içerir -- bu yüzden "
+                        "yukarıdaki NET etkiden farklı çıkabilir, hatta bazen aynı yönde görünebilir "
+                        "(örn. hem artırma hem azaltma senaryosu, güçlü bir doğal artış eğilimi "
+                        "varsa, gerçek geçmiş değere göre hâlâ 'artış' gibi görünebilir)."
+                    )
+                    degisim = senaryo["degisim_yuzde"]
+                    st.metric("Gerçek son döneme göre toplam beklenen değişim", f"%{degisim:+.1f}" if degisim is not None else "—")
+
+                c1, c2, c3 = st.columns(3)
                 c1.metric("Son dönem gerçekleşen verimlilik (MI)", senaryo["son_gercek_ortalama_MI"])
-                c2.metric("Sizin senaryonuzla (yeni tahmin)", senaryo["senaryo_ortalama_MI"])
+                c2.metric("Hiç değişiklik yapılmasaydı (model tahmini)", senaryo["taban_sifir_degisim_MI"])
+                c3.metric("Sizin senaryonuzla (yeni tahmin)", senaryo["senaryo_ortalama_MI"])
 
                 with st.expander("DMU (proje) bazında detay"):
                     st.dataframe(senaryo["detay_df"], use_container_width=True)

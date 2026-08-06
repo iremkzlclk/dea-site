@@ -186,14 +186,24 @@ def senaryo_tahmin_et(model_paketi: dict, sonuc: dict, girdi_cols: list, cikti_c
     yeniden cozmeden, dogrudan modelin ogrendigi iliskiyi kullanarak
     (bu yuzden ANINDA sonuc verir).
 
-    KIYASLAMA NOKTASI: modelin "hicbir sey degismeseydi ne tahmin ederdim"
-    OZ-TAHMINI DEGIL -- SON DONEMIN GERCEKTEN GERCEKLESMIS (olculmus) MI
-    degeri kullanilir. Bunun nedeni: modelin kendi taban tahmini, gecmis
-    veride ogrendigi dogal bir trendi (orn. "MI zaten kendiliginden artiyor")
-    icerebilir -- bu, "degisiklik yapmasaydim ne olurdu" ile "gercekte en
-    son ne oldu" birbirine karisip kafa karistirabiliyordu. Gercek, bilinen
-    bir sayiyla kiyaslamak bu belirsizligi ortadan kaldirir ve senaryonun
-    NET etkisini daha yalin gosterir.
+    IKI AYRI KARSILASTIRMA dondurulur -- bunlar FARKLI SORULARA cevap verir,
+    birbirine KARISTIRILMAMALIDIR:
+
+    1) senaryo_etkisi_yuzde: SADECE sizin girdi degisikliginizin MARJINAL
+       etkisi -- modelin "hicbir sey degismeseydi ne tahmin ederdim" (kendi
+       sifir-degisim tahmini) ile "sizin senaryonuzla ne tahmin ederim"
+       arasindaki fark. DOGRUSAL modellerde (Ridge/Lasso/ElasticNet) bu
+       deger, panel katsayisinin isaretiyle HER ZAMAN tutarlidir -- bir
+       girdiyi artirmak ve azaltmak MATEMATIKSEL OLARAK ZIT YONDE sonuc
+       verir. "Bu girdiyi degistirmek ise yarar mi" sorusuna cevap budur.
+
+    2) degisim_yuzde: senaryonuzun, GECMISTE GERCEKTEN GERCEKLESMIS (olculmus)
+       son donem MI degerine gore TOPLAM farki. Bu, hem sizin senaryonuzun
+       etkisini HEM DE modelin verinizde ogrendigi dogal trendi (orn. "MI
+       kendiliginden artiyor/azaliyor" egilimini) birlikte icerir -- bu
+       yuzden "artir" ve "azalt" senaryolari GERCEK degere gore AYNI YONDE
+       cikabilir (ikisi de dogal trendin altinda/ustunde kalabilir). "Bir
+       sonraki donem GENEL OLARAK nerede olacagim" sorusuna cevap budur.
 
     Cikti degiskenleri SON DONEMdeki gercek degerinde SABIT tutulur --
     donem basinda karar verilebilecek bir sey olmadigi icin (bkz. senaryo_module.py
@@ -201,9 +211,10 @@ def senaryo_tahmin_et(model_paketi: dict, sonuc: dict, girdi_cols: list, cikti_c
 
     girdi_yuzdeleri: dict -- {girdi_adi: yuzde (orn. 0.10 = %10 artis, -0.10 = %10 azalis)}
 
-    Returns: dict -- son_gercek_ortalama_MI (gecmiste GERCEKTEN olculen,
-             son gecisin ortalama MI'si), senaryo_ortalama_MI (modelin
-             sizin senaryonuz icin tahmini), degisim_yuzde, detay_df (DMU bazinda)
+    Returns: dict -- son_gercek_ortalama_MI, taban_sifir_degisim_MI (modelin
+             kendi "hicbir sey degismeseydi" tahmini), senaryo_ortalama_MI,
+             senaryo_etkisi_yuzde (marjinal etki, madde 1), degisim_yuzde
+             (gercege gore toplam fark, madde 2), detay_df (DMU bazinda)
     """
     pipeline = model_paketi["pipeline"]
     son_donem = sonuc["veri"]["donem_sirali"][-1]
@@ -216,37 +227,48 @@ def senaryo_tahmin_et(model_paketi: dict, sonuc: dict, girdi_cols: list, cikti_c
     son_gecis_zamani = sorted(panel_df.index.get_level_values("time").unique())[-1]
     son_gercek_MI = panel_df.xs(son_gecis_zamani, level="time")["MI"]
 
-    senaryo_satirlari = []
+    taban_satirlari, senaryo_satirlari = [], []
     for dmu in dmu_sirali:
-        satir_senaryo = []
+        satir_taban, satir_senaryo = [], []
         for g in girdi_cols:
             deger = float(X_son.loc[dmu, g])
+            satir_taban.append(deger)
             yuzde = girdi_yuzdeleri.get(g, 0.0)
             satir_senaryo.append(deger * (1 + yuzde))
         for c in cikti_cols:
-            satir_senaryo.append(float(Y_son.loc[dmu, c]))
+            deger = float(Y_son.loc[dmu, c])
+            satir_taban.append(deger)
+            satir_senaryo.append(deger)
+        taban_satirlari.append(satir_taban)
         senaryo_satirlari.append(satir_senaryo)
 
+    taban_tahminleri = pipeline.predict(np.array(taban_satirlari))  # "hicbir sey degismeseydi"
     senaryo_tahminleri = pipeline.predict(np.array(senaryo_satirlari))
     # ML tahmini (regresyon) teorik olarak negatif/sifir da uretebilir (DEA'nin
     # aksine MI>0 kisitini garanti etmez) -- geometrik ortalama negatif/sifir
     # degerlerde tanimsiz oldugu icin kucuk bir taban uyguluyoruz.
+    taban_tahminleri_guvenli = np.clip(taban_tahminleri, 0.01, None)
     senaryo_tahminleri_guvenli = np.clip(senaryo_tahminleri, 0.01, None)
 
     detay = pd.DataFrame({
         "DMU": dmu_sirali,
         "son_gercek_MI": [round(float(son_gercek_MI.get(dmu, np.nan)), 4) for dmu in dmu_sirali],
+        "taban_sifir_degisim_MI": np.round(taban_tahminleri, 4),
         "senaryo_tahmin_MI": np.round(senaryo_tahminleri, 4),
     })
-    detay["degisim"] = (detay["senaryo_tahmin_MI"] - detay["son_gercek_MI"]).round(4)
+    detay["senaryo_etkisi"] = (detay["senaryo_tahmin_MI"] - detay["taban_sifir_degisim_MI"]).round(4)
+    detay["gercege_gore_fark"] = (detay["senaryo_tahmin_MI"] - detay["son_gercek_MI"]).round(4)
     detay = detay.set_index("DMU")
 
     son_gercek_ort = float(gmean(son_gercek_MI.to_numpy()))
+    taban_ort = float(gmean(taban_tahminleri_guvenli))
     senaryo_ort = float(gmean(senaryo_tahminleri_guvenli))
 
     return {
         "son_gercek_ortalama_MI": round(son_gercek_ort, 4),
+        "taban_sifir_degisim_MI": round(taban_ort, 4),
         "senaryo_ortalama_MI": round(senaryo_ort, 4),
+        "senaryo_etkisi_yuzde": round((senaryo_ort - taban_ort) / taban_ort * 100, 2) if taban_ort else None,
         "degisim_yuzde": round((senaryo_ort - son_gercek_ort) / son_gercek_ort * 100, 2) if son_gercek_ort else None,
         "detay_df": detay,
     }
@@ -386,6 +408,16 @@ def en_iyi_modeli_sec(panel_df: pd.DataFrame, bagimsizlar: list, bagimli: str = 
     HEPSINI backtest'ten gecirir ve GECMISI EN IYI TAHMIN EDEN modeli otomatik
     secer -- boylece kullanicinin 4 model arasinda KENDI SECIM YAPMASI gerekmez.
 
+    ONEMLI: Random Forest, KARSILASTIRMA TABLOSUNDA gosterilir (seffaflik icin)
+    ama HICBIR ZAMAN otomatik SECILEN model olamaz. Nedeni: Random Forest
+    dogrusal degildir (karar agaclari kullanir) -- bu yuzden bir girdiyi HEM
+    artirmak HEM azaltmak, ayni yonde (orn. ikisi de artis) bir tahmin
+    degisikligi VEREBILIR ("U seklinde" yerel davranis). Dogrusal modellerde
+    (Ridge/Lasso/ElasticNet) bu MATEMATIKSEL OLARAK IMKANSIZDIR -- katsayinin
+    isareti sabittir, artirmak ve azaltmak HER ZAMAN zit yonde sonuc verir.
+    Bir yatirim-yonu araci icin bu tutarlilik kritik oldugundan, sadece
+    dogrusal modeller otomatik secim havuzuna girer.
+
     Secim kriteri: once Rolling Backtest (varsa) ortalama YON DOGRULUGU'nu
     (yuksek=iyi) esas alir -- bu sekmenin amaci (girdiyi artir/azalt
     kararı) icin en pratik olcut budur; esitlik durumunda ortalama MAE
@@ -394,7 +426,7 @@ def en_iyi_modeli_sec(panel_df: pd.DataFrame, bagimsizlar: list, bagimli: str = 
 
     Returns: dict -- secilen_model (str), gerekce (str, kullaniciya gosterilecek
              aciklama), karsilastirma_df (DataFrame, 4 modelin yan yana
-             metrikleri -- seffaflik icin)
+             metrikleri -- seffaflik icin, Random Forest dahil)
     """
     adaylar = []
     for model_tipi in ["ridge", "lasso", "elasticnet", "random_forest"]:
@@ -422,11 +454,32 @@ def en_iyi_modeli_sec(panel_df: pd.DataFrame, bagimsizlar: list, bagimli: str = 
         ["yon_dogruluk_%", "MAE"], ascending=[False, True]
     ).reset_index(drop=True)
 
-    secilen = karsilastirma_df.iloc[0]
+    # Secim havuzu SADECE dogrusal modeller (Ridge/Lasso/ElasticNet) --
+    # Random Forest karsilastirma tablosunda goruntulenir ama secilemez
+    # (bkz. fonksiyon docstring'i -- dogrusal olmayan yon tutarsizligi riski).
+    dogrusal_adaylar = karsilastirma_df[karsilastirma_df["model"] != "random_forest"]
+    if dogrusal_adaylar.empty:
+        return {
+            "basarili": False,
+            "mesaj": "Hicbir dogrusal model (Ridge/Lasso/ElasticNet) icin yeterli veri bulunamadi.",
+        }
+
+    secilen = dogrusal_adaylar.iloc[0]
+    rf_notu = ""
+    if "random_forest" in karsilastirma_df["model"].values:
+        rf_satiri = karsilastirma_df[karsilastirma_df["model"] == "random_forest"].iloc[0]
+        if (rf_satiri["yon_dogruluk_%"] > secilen["yon_dogruluk_%"]) or \
+           (rf_satiri["yon_dogruluk_%"] == secilen["yon_dogruluk_%"] and rf_satiri["MAE"] < secilen["MAE"]):
+            rf_notu = (
+                f" (Random Forest'in backtest metrikleri aslında daha iyi çıktı, ama doğrusal "
+                f"olmadığı için -- bir girdiyi artırmak VE azaltmak aynı yönde sonuç verebildiği "
+                f"için -- otomatik seçim dışında tutuldu.)"
+            )
     gerekce = (
         f"**{secilen['model'].upper()}** seçildi -- geçmiş dönemleri tahmin etmede "
-        f"({secilen['kaynak']} backtest) diğer {len(adaylar)-1} modelden daha isabetliydi "
+        f"({secilen['kaynak']} backtest) diğer doğrusal modellerden daha isabetliydi "
         f"(MAE={secilen['MAE']}, yön doğruluğu=%{secilen['yon_dogruluk_%']})."
+        f"{rf_notu}"
     )
 
     return {
