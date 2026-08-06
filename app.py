@@ -124,10 +124,18 @@ st.markdown("""
     [data-testid="stDataFrame"] * {
         font-size: 1.05rem !important;
     }
-    /* Sekme (tab) basliklari */
-    .stTabs [data-baseweb="tab"] {
-        font-size: 1.15rem !important;
-        padding: 10px 18px !important;
+    /* Sekme (tab) basliklari -- ic metin farkli katmanlarda olabildigi icin
+       hem butonun kendisi hem icindeki olasi p/div/span etiketleri hedeflendi */
+    .stTabs [data-baseweb="tab-list"] button[data-baseweb="tab"] {
+        font-size: 1.5rem !important;
+        font-weight: 700 !important;
+        padding: 14px 22px !important;
+    }
+    .stTabs [data-baseweb="tab-list"] button[data-baseweb="tab"] p,
+    .stTabs [data-baseweb="tab-list"] button[data-baseweb="tab"] div,
+    .stTabs [data-baseweb="tab-list"] button[data-baseweb="tab"] span {
+        font-size: 1.5rem !important;
+        font-weight: 700 !important;
     }
     /* Butonlar */
     .stButton button, .stDownloadButton button {
