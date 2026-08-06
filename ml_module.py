@@ -26,6 +26,7 @@ regresyonuyla DOGRUDAN, adil bir kiyaslama yapilabilir.
 """
 import numpy as np
 import pandas as pd
+from scipy.stats import gmean
 
 from sklearn.linear_model import RidgeCV, LassoCV, ElasticNetCV
 from sklearn.ensemble import RandomForestRegressor
@@ -227,6 +228,10 @@ def senaryo_tahmin_et(model_paketi: dict, sonuc: dict, girdi_cols: list, cikti_c
         senaryo_satirlari.append(satir_senaryo)
 
     senaryo_tahminleri = pipeline.predict(np.array(senaryo_satirlari))
+    # ML tahmini (regresyon) teorik olarak negatif/sifir da uretebilir (DEA'nin
+    # aksine MI>0 kisitini garanti etmez) -- geometrik ortalama negatif/sifir
+    # degerlerde tanimsiz oldugu icin kucuk bir taban uyguluyoruz.
+    senaryo_tahminleri_guvenli = np.clip(senaryo_tahminleri, 0.01, None)
 
     detay = pd.DataFrame({
         "DMU": dmu_sirali,
@@ -236,8 +241,8 @@ def senaryo_tahmin_et(model_paketi: dict, sonuc: dict, girdi_cols: list, cikti_c
     detay["degisim"] = (detay["senaryo_tahmin_MI"] - detay["son_gercek_MI"]).round(4)
     detay = detay.set_index("DMU")
 
-    son_gercek_ort = float(son_gercek_MI.mean())
-    senaryo_ort = float(np.mean(senaryo_tahminleri))
+    son_gercek_ort = float(gmean(son_gercek_MI.to_numpy()))
+    senaryo_ort = float(gmean(senaryo_tahminleri_guvenli))
 
     return {
         "son_gercek_ortalama_MI": round(son_gercek_ort, 4),
