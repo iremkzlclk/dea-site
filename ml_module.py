@@ -307,19 +307,30 @@ def senaryo_tahmin_et(model_paketi: dict, sonuc: dict, girdi_cols: list, cikti_c
         "senaryo_tahmin_MI": np.round(senaryo_tahminleri, 4),
     })
     detay["senaryo_etkisi"] = (detay["senaryo_tahmin_MI"] - detay["taban_sifir_degisim_MI"]).round(4)
+    # ANA METRIK: gercek son donem degerinize, kararinizin (modelin ogrendigi
+    # ORANTISAL/marjinal) etkisini DOGRUDAN ekliyoruz -- "genel ortalamaya
+    # yakinsama" kavramini KULLANICIYA HIC GOSTERMEDEN. Dogrusal modellerde
+    # (Ridge/Lasso/ElasticNet) bir degisikligin etkisi baslangic noktasindan
+    # BAGIMSIZ SABIT oldugu icin bu matematiksel olarak tam gecerlidir --
+    # "modelin taban tahmini" yerine dogrudan "sizin gercek son donem
+    # degeriniz" cikis noktasi olarak kullanilabilir.
+    detay["tahmini_gelecek_MI"] = (detay["son_gercek_MI"] + detay["senaryo_etkisi"]).round(4)
     detay["gercege_gore_fark"] = (detay["senaryo_tahmin_MI"] - detay["son_gercek_MI"]).round(4)
     detay = detay.set_index("DMU")
 
     son_gercek_ort = float(gmean(son_gercek_MI.to_numpy()))
     taban_ort = float(gmean(taban_tahminleri_guvenli))
     senaryo_ort = float(gmean(senaryo_tahminleri_guvenli))
+    tahmini_gelecek_ort = float(gmean(np.clip(detay["tahmini_gelecek_MI"].to_numpy(), 0.01, None)))
 
     return {
         "son_gercek_ortalama_MI": round(son_gercek_ort, 4),
         "taban_sifir_degisim_MI": round(taban_ort, 4),
         "senaryo_ortalama_MI": round(senaryo_ort, 4),
+        "tahmini_gelecek_ortalama_MI": round(tahmini_gelecek_ort, 4),
         "senaryo_etkisi_yuzde": round((senaryo_ort - taban_ort) / taban_ort * 100, 2) if taban_ort else None,
         "degisim_yuzde": round((senaryo_ort - son_gercek_ort) / son_gercek_ort * 100, 2) if son_gercek_ort else None,
+        "tahmini_degisim_yuzde": round((tahmini_gelecek_ort - son_gercek_ort) / son_gercek_ort * 100, 2) if son_gercek_ort else None,
         "detay_df": detay,
     }
 

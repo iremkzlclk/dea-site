@@ -963,41 +963,42 @@ if "sonuc" in st.session_state:
                 senaryo = senaryo_tahmin_et(mp, sonuc, girdi_cols, cikti_cols, girdi_yuzdeleri)
 
                 st.write("---")
-                st.markdown("#### 📈 Tahmini Sonuç")
+                st.markdown("#### 📈 Bir Sonraki Dönem Tahmini")
 
                 if all(v == 0 for v in girdi_yuzdeleri.values()):
                     st.info("Henüz bir girdi için Artır/Azalt seçmediniz -- yukarıdan seçim yapın.")
                 else:
-                    etki = senaryo["senaryo_etkisi_yuzde"]
-                    st.markdown("##### 1) Yaptığınız değişikliğin NET etkisi")
                     st.caption(
-                        "Sadece sizin Artır/Azalt seçiminizin etkisi -- diğer her şey sabit "
-                        "tutulsaydı bu değişiklik verimliliği ne kadar değiştirirdi. Bu sayı, "
-                        "Panel Analizi sekmesindeki katsayı yönüyle her zaman tutarlıdır."
+                        "**Nasıl hesaplanıyor:** Gerçek son dönem verimliliğinize (MI), "
+                        "seçtiğiniz Artır/Azalt kararının modelin öğrendiği etkisini doğrudan "
+                        "ekliyoruz -- yani *Tahmini gelecek MI = Gerçek son dönem MI + Kararınızın etkisi*."
                     )
-                    if etki is not None and etki > 0.5:
-                        st.success(f"## ✅ %{etki:+.1f} (bu değişiklik verimliliği artırır)")
-                    elif etki is not None and etki < -0.5:
-                        st.warning(f"## ⚠️ %{etki:+.1f} (bu değişiklik verimliliği azaltır)")
+
+                    tahmin_yuzde = senaryo["tahmini_degisim_yuzde"]
+                    if tahmin_yuzde is not None and tahmin_yuzde > 0.5:
+                        st.success(f"## ✅ Verimlilik tahmini: %{tahmin_yuzde:+.1f} (artış)")
+                    elif tahmin_yuzde is not None and tahmin_yuzde < -0.5:
+                        st.warning(f"## ⚠️ Verimlilik tahmini: %{tahmin_yuzde:+.1f} (azalış)")
                     else:
-                        st.info(f"## %{etki:+.1f} (pratikte etkisi yok)")
+                        st.info(f"## Verimlilik tahmini: %{tahmin_yuzde:+.1f} (pratikte değişim yok)")
 
-                    st.write("")
-                    st.markdown("##### 2) Bir sonraki dönem GENEL OLARAK nerede olacaksınız")
-                    st.caption(
-                        "Bu, hem sizin değişikliğinizi HEM DE verinizdeki doğal eğilimi (geçmişte "
-                        "MI'nin kendiliğinden artma/azalma eğilimini) birlikte içerir -- bu yüzden "
-                        "yukarıdaki NET etkiden farklı çıkabilir, hatta bazen aynı yönde görünebilir "
-                        "(örn. hem artırma hem azaltma senaryosu, güçlü bir doğal artış eğilimi "
-                        "varsa, gerçek geçmiş değere göre hâlâ 'artış' gibi görünebilir)."
-                    )
-                    degisim = senaryo["degisim_yuzde"]
-                    st.metric("Gerçek son döneme göre toplam beklenen değişim", f"%{degisim:+.1f}" if degisim is not None else "—")
+                    c1, c2 = st.columns(2)
+                    c1.metric("Şu anki gerçek verimliliğiniz (MI)", senaryo["son_gercek_ortalama_MI"])
+                    c2.metric("Bu kararla bir sonraki dönem tahmini (MI)", senaryo["tahmini_gelecek_ortalama_MI"])
 
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Son dönem gerçekleşen verimlilik (MI)", senaryo["son_gercek_ortalama_MI"])
-                c2.metric("Hiç değişiklik yapılmasaydı (model tahmini)", senaryo["taban_sifir_degisim_MI"])
-                c3.metric("Sizin senaryonuzla (yeni tahmin)", senaryo["senaryo_ortalama_MI"])
+                    with st.expander("Bu hesaplamanın detayına bakmak isterseniz"):
+                        st.caption(
+                            "Model, kararınızın etkisini hesaplarken önce 'hiçbir şey değişmeseydi "
+                            "model ne tahmin ederdi' diye bir referans noktası kullanıyor -- ama bu "
+                            "referans noktasının kendisi, sizin gerçek geçmiş verinizden farklı "
+                            "çıkabilir (model, verideki genel eğilimleri öğrendiği için). Bu yüzden "
+                            "biz bu ara adımı sizden gizleyip, doğrudan kararınızın SAF etkisini "
+                            "gerçek son dönem değerinize ekliyoruz -- yukarıdaki sonuç budur."
+                        )
+                        cc1, cc2, cc3 = st.columns(3)
+                        cc1.metric("Model referans noktası (hiç değişiklik yapılmasaydı)", senaryo["taban_sifir_degisim_MI"])
+                        cc2.metric("Model tahmini (kararınızla)", senaryo["senaryo_ortalama_MI"])
+                        cc3.metric("Aradaki fark (kararınızın etkisi)", round(senaryo["senaryo_ortalama_MI"] - senaryo["taban_sifir_degisim_MI"], 4))
 
                 with st.expander("DMU (proje) bazında detay"):
                     st.dataframe(senaryo["detay_df"], use_container_width=True)
