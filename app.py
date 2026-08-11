@@ -1146,25 +1146,43 @@ if "sonuc" in st.session_state:
                 ),
             ).configure_view(strokeWidth=0).configure(background="transparent")
 
-            # SVG render'a zorlamak icin dogrudan vega-embed kullanıyoruz --
-            # Streamlit'in varsayilan (canvas/raster) render'i, kullanici
-            # yakinlastirdiginda bulaniklasiyordu; SVG vektor oldugu icin
-            # HER ZOOM SEVIYESINDE keskin kalir.
-            grafik_json = pasta.to_json()
-            html_kod = f"""
-            <div id="pasta-grafik-{hash(str(tablo_ac_gorsel.values.tobytes()))}" style="width:100%;"></div>
-            <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
-            <script src="https://cdn.jsdelivr.net/npm/vega-lite@5"></script>
-            <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
-            <script>
-              vegaEmbed(
-                "#pasta-grafik-{hash(str(tablo_ac_gorsel.values.tobytes()))}",
-                {grafik_json},
-                {{"renderer": "svg", "actions": false}}
-              );
-            </script>
-            """
-            components.html(html_kod, height=800, scrolling=False)
+            # ONCE her zaman calisan (kanitlanmis) native Streamlit render'i gosteriyoruz --
+            # bu, sayfanin ASLA bos kalmamasini garanti eder.
+            st.altair_chart(pasta, use_container_width=True)
+
+            # Ek olarak, SVG (zoom'da bulanıklaşmayan) bir versiyonu da katlanır bir
+            # kutuda deniyoruz -- basarisiz olursa (CDN/iframe sorunu) net bir hata
+            # mesaji gosterir, sayfa SESSIZCE bos KALMAZ.
+            with st.expander("🔍 Daha keskin (SVG) versiyonu dene (isteğe bağlı, deneysel)"):
+                st.caption(
+                    "Yukarıdaki grafik zaten çalışıyor -- bu, sadece aşırı yakınlaştırmada "
+                    "daha keskin kalabilecek bir alternatif. Yüklenmezse yukarıdaki grafiği kullanın."
+                )
+                grafik_json = pasta.to_json()
+                html_kod = f"""
+                <div id="svg-pasta-grafik" style="width:100%; min-height:750px;"></div>
+                <div id="svg-hata-mesaji" style="color:#b00020; font-family:sans-serif; display:none;"></div>
+                <script src="https://cdn.jsdelivr.net/npm/vega@5.30.0"></script>
+                <script src="https://cdn.jsdelivr.net/npm/vega-lite@5.20.1"></script>
+                <script src="https://cdn.jsdelivr.net/npm/vega-embed@6.26.0"></script>
+                <script>
+                  document.addEventListener("DOMContentLoaded", function () {{
+                    if (typeof vegaEmbed === "undefined") {{
+                      document.getElementById("svg-hata-mesaji").style.display = "block";
+                      document.getElementById("svg-hata-mesaji").innerText =
+                        "⚠️ Grafik kütüphanesi yüklenemedi (CDN erişim sorunu olabilir). Lütfen yukarıdaki normal grafiği kullanın.";
+                      return;
+                    }}
+                    vegaEmbed("#svg-pasta-grafik", {grafik_json}, {{"renderer": "svg", "actions": false}})
+                      .catch(function (hata) {{
+                        document.getElementById("svg-hata-mesaji").style.display = "block";
+                        document.getElementById("svg-hata-mesaji").innerText =
+                          "⚠️ Grafik yüklenemedi: " + hata.message + " -- Lütfen yukarıdaki normal grafiği kullanın.";
+                      }});
+                  }});
+                </script>
+                """
+                components.html(html_kod, height=820, scrolling=False)
 
             st.markdown("##### Detay Tablo")
             st.caption(
