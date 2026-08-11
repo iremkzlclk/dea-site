@@ -95,67 +95,150 @@ def excel_indirme_verisi(df_or_obj) -> bytes:
 EXCEL_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
-st.set_page_config(page_title="DEA + Malmquist + Panel Analizi", layout="wide")
+st.set_page_config(page_title="DEA + Malmquist + Panel Analizi", page_icon="📐", layout="wide")
 
 st.markdown("""
 <style>
-    /* Genel govde metni (paragraflar, aciklamalar) */
+    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Inter:wght@400;500;600&display=swap');
+
+    :root {
+        --kurumsal-lacivert: #1F3A5F;
+        --kurumsal-lacivert-koyu: #142943;
+        --kurumsal-altin: #C9A227;
+        --kurumsal-acik-gri: #F7F8FA;
+        --kurumsal-kenar: #E2E5EA;
+    }
+
+    /* Genel govde metni -- temiz, kurumsal sans-serif */
     html, body, [class*="css"]  {
         font-size: 18px !important;
+        font-family: 'Inter', 'Segoe UI', sans-serif !important;
     }
-    /* Ana baslik */
-    h1 { font-size: 2.4rem !important; }
-    /* Alt basliklar (#### ile yazilanlar dahil) */
+
+    /* Basliklar -- lacivert renk + zarif serif font */
+    h1, h2, h3 {
+        font-family: 'Playfair Display', Georgia, serif !important;
+        color: var(--kurumsal-lacivert) !important;
+    }
+    h1 { font-size: 2.4rem !important; padding-bottom: 0.4rem; border-bottom: 3px solid var(--kurumsal-altin); }
     h2 { font-size: 1.9rem !important; }
     h3 { font-size: 1.6rem !important; }
-    h4 { font-size: 1.35rem !important; }
+    h4 { font-size: 1.35rem !important; color: var(--kurumsal-lacivert-koyu) !important; }
     h5 { font-size: 1.2rem !important; }
+
     /* st.caption ile yazilan aciklama metinleri -- varsayilan cok kucuk kaliyor */
     [data-testid="stCaptionContainer"], .stCaption, small {
         font-size: 1.05rem !important;
         line-height: 1.5 !important;
+        color: #555 !important;
     }
-    /* st.metric buyuk sayi ve etiketi */
+
+    /* st.metric -- kart gorunumu (hafif golge, altin aksan cizgisi) */
+    [data-testid="stMetric"] {
+        background: white;
+        border: 1px solid var(--kurumsal-kenar);
+        border-left: 4px solid var(--kurumsal-altin);
+        border-radius: 10px;
+        padding: 1rem 1.2rem;
+        box-shadow: 0 2px 6px rgba(31,58,95,0.06);
+    }
     [data-testid="stMetricValue"] {
         font-size: 2.2rem !important;
+        color: var(--kurumsal-lacivert) !important;
+        font-weight: 600 !important;
     }
     [data-testid="stMetricLabel"] {
-        font-size: 1.1rem !important;
+        font-size: 1.05rem !important;
+        color: #555 !important;
     }
+
     /* Tablo (st.dataframe) icindeki yazi */
     [data-testid="stDataFrame"] * {
         font-size: 1.05rem !important;
     }
-    /* Sekme (tab) basliklari -- ic metin farkli katmanlarda olabildigi icin
-       hem butonun kendisi hem icindeki olasi p/div/span etiketleri hedeflendi */
+
+    /* Sekme (tab) basliklari -- secili sekme lacivert+altin vurgulu */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 4px;
+        border-bottom: 2px solid var(--kurumsal-kenar);
+    }
     .stTabs [data-baseweb="tab-list"] button[data-baseweb="tab"] {
-        font-size: 1.5rem !important;
-        font-weight: 700 !important;
-        padding: 14px 22px !important;
+        font-size: 1.4rem !important;
+        font-weight: 600 !important;
+        padding: 12px 20px !important;
+        color: #666 !important;
     }
     .stTabs [data-baseweb="tab-list"] button[data-baseweb="tab"] p,
     .stTabs [data-baseweb="tab-list"] button[data-baseweb="tab"] div,
     .stTabs [data-baseweb="tab-list"] button[data-baseweb="tab"] span {
-        font-size: 1.5rem !important;
-        font-weight: 700 !important;
+        font-size: 1.4rem !important;
+        font-weight: 600 !important;
     }
-    /* Butonlar */
-    .stButton button, .stDownloadButton button {
+    .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] {
+        color: var(--kurumsal-lacivert) !important;
+    }
+    .stTabs [data-baseweb="tab-highlight"] {
+        background-color: var(--kurumsal-altin) !important;
+        height: 3px !important;
+    }
+
+    /* Butonlar -- kurumsal lacivert (Streamlit'in varsayilan kirmizisi yerine) */
+    .stButton button[kind="primary"], .stButton button[kind="primaryFormSubmit"] {
+        background-color: var(--kurumsal-lacivert) !important;
+        border-color: var(--kurumsal-lacivert) !important;
         font-size: 1.1rem !important;
-        padding: 0.6rem 1.2rem !important;
+        padding: 0.6rem 1.4rem !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
     }
+    .stButton button[kind="primary"]:hover {
+        background-color: var(--kurumsal-lacivert-koyu) !important;
+        border-color: var(--kurumsal-lacivert-koyu) !important;
+    }
+    .stButton button[kind="secondary"], .stDownloadButton button {
+        color: var(--kurumsal-lacivert) !important;
+        border-color: var(--kurumsal-lacivert) !important;
+        font-size: 1.05rem !important;
+        padding: 0.55rem 1.2rem !important;
+        border-radius: 8px !important;
+        font-weight: 500 !important;
+    }
+    .stButton button[kind="secondary"]:hover, .stDownloadButton button:hover {
+        background-color: var(--kurumsal-acik-gri) !important;
+        border-color: var(--kurumsal-lacivert-koyu) !important;
+        color: var(--kurumsal-lacivert-koyu) !important;
+    }
+
     /* Girdi kutulari, radio, selectbox etiketleri */
     .stRadio label, .stSelectbox label, .stNumberInput label, .stTextInput label {
         font-size: 1.05rem !important;
     }
-    /* Genisletilebilir (expander) basliklari */
+
+    /* Genisletilebilir (expander) kutulari -- kart gorunumu */
+    [data-testid="stExpander"] {
+        border: 1px solid var(--kurumsal-kenar) !important;
+        border-radius: 10px !important;
+        background: white;
+    }
     .streamlit-expanderHeader, [data-testid="stExpander"] summary {
         font-size: 1.15rem !important;
+        color: var(--kurumsal-lacivert) !important;
+        font-weight: 600 !important;
     }
-    /* Bilgi/uyari/basari kutulari (st.info/success/warning/error) */
+
+    /* Bilgi/uyari/basari kutulari -- yumusatilmis kurumsal tonlar */
     [data-testid="stAlertContentInfo"], [data-testid="stAlertContentSuccess"],
     [data-testid="stAlertContentWarning"], [data-testid="stAlertContentError"] {
         font-size: 1.1rem !important;
+    }
+    div[data-baseweb="notification"] {
+        border-radius: 10px !important;
+    }
+
+    /* st.container(border=True) kutulari -- hafif golgeli kart gorunumu */
+    div[data-testid="stVerticalBlockBorderWrapper"] > div[style*="border"] {
+        border-radius: 10px !important;
+        box-shadow: 0 1px 4px rgba(31,58,95,0.05);
     }
 </style>
 """, unsafe_allow_html=True)
