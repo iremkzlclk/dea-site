@@ -245,7 +245,7 @@ st.markdown("""
 
 st.title("ArGe Verimlilik Analiz Platformu")
 st.markdown(
-    "<p style='font-size:1.2rem; color:#666; margin-top:-0.2rem; font-family:Inter,sans-serif;'>"
+    "<p style='font-size:1.2rem; color:#666; margin-top:-0.1rem; font-family:Inter,sans-serif;'>"
     "DEA · Malmquist Endeksi · Panel Veri Analizi</p>",
     unsafe_allow_html=True,
 )
