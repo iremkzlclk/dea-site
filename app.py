@@ -249,9 +249,9 @@ if "sonuc" in st.session_state:
     girdi_cols = sonuc["veri"]["girdi_cols"]
     cikti_cols = sonuc["veri"]["cikti_cols"]
 
-    tab_dea, tab_malmquist, tab_panel, tab_backtest, tab_ml, tab_aciklayici = st.tabs(
-        ["DEA Sonuclari", "Malmquist Sonuclari", "Panel Analizi", "Backtest (Model Dogrulama)",
-         "ML Tahmin", "Açıklayıcılık"]
+    tab_dea, tab_malmquist, tab_panel, tab_aciklayici, tab_backtest, tab_ml = st.tabs(
+        ["DEA Sonuclari", "Malmquist Sonuclari", "Panel Analizi", "Açıklayıcılık",
+         "Backtest (Model Dogrulama)", "ML Tahmin"]
     )
 
     with tab_dea:
@@ -1113,8 +1113,10 @@ if "sonuc" in st.session_state:
                 color=alt.Color(
                     "degisken:N", scale=renk_skala,
                     legend=alt.Legend(
-                        title="Değişken", labelFontSize=13, titleFontSize=14,
-                        symbolSize=160, labelLimit=220,
+                        title="Değişken", labelFontSize=17, titleFontSize=18,
+                        symbolSize=280, labelLimit=400, orient="bottom",
+                        columns=1, columnPadding=25, rowPadding=10, direction="vertical",
+                        titleAnchor="middle", padding=15,
                     ),
                 ),
                 order=alt.Order("pay_yuzde:Q", sort="descending"),
