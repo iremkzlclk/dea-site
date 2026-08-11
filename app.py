@@ -7,6 +7,7 @@ Calistirmak icin: streamlit run app.py
 import streamlit as st
 import pandas as pd
 import altair as alt
+import streamlit.components.v1 as components
 import io
 from excel_okuma import excel_oku, donemlere_ayir, VeriDogrulamaHatasi
 from dea_module import min_dmu_kontrolu
@@ -1113,10 +1114,10 @@ if "sonuc" in st.session_state:
                 color=alt.Color(
                     "degisken:N", scale=renk_skala,
                     legend=alt.Legend(
-                        title="Değişken", labelFontSize=17, titleFontSize=18,
-                        symbolSize=280, labelLimit=400, orient="bottom",
-                        columns=1, columnPadding=25, rowPadding=10, direction="vertical",
-                        titleAnchor="middle", padding=15,
+                        title="Değişken", labelFontSize=20, titleFontSize=22,
+                        symbolSize=320, labelLimit=420, orient="bottom",
+                        columns=1, columnPadding=30, rowPadding=12, direction="vertical",
+                        titleAnchor="start", padding=15, titlePadding=10,
                     ),
                 ),
                 order=alt.Order("pay_yuzde:Q", sort="descending"),
@@ -1132,20 +1133,38 @@ if "sonuc" in st.session_state:
                 innerRadius=130, outerRadius=270, stroke="white", strokeWidth=3, cornerRadius=3,
             )
             yuzde_etiketleri = taban_kat.mark_text(
-                radius=300, fontSize=18, fontWeight="bold", color="#333333",
+                radius=305, fontSize=21, fontWeight="bold", color="#333333",
             ).encode(text=alt.Text("etiket_metni:N"))
 
             pasta = (pasta_dilimleri + yuzde_etiketleri).properties(
                 width="container", height=750,
-                padding={"top": 55, "bottom": 15, "left": 15, "right": 15},
+                padding={"top": 55, "bottom": 15, "left": 40, "right": 40},
                 title=alt.TitleParams(
                     text="Değişkenlerin R²'ye Katkı Payı", subtitle="(mutlak payla ölçeklenmiştir)",
-                    fontSize=22, subtitleFontSize=14, font="Georgia", color="#1F3A5F",
+                    fontSize=24, subtitleFontSize=15, font="Georgia", color="#1F3A5F",
                     subtitleColor="#666666", anchor="middle", offset=20,
                 ),
             ).configure_view(strokeWidth=0).configure(background="transparent")
 
-            st.altair_chart(pasta, use_container_width=True)
+            # SVG render'a zorlamak icin dogrudan vega-embed kullanıyoruz --
+            # Streamlit'in varsayilan (canvas/raster) render'i, kullanici
+            # yakinlastirdiginda bulaniklasiyordu; SVG vektor oldugu icin
+            # HER ZOOM SEVIYESINDE keskin kalir.
+            grafik_json = pasta.to_json()
+            html_kod = f"""
+            <div id="pasta-grafik-{hash(str(tablo_ac_gorsel.values.tobytes()))}" style="width:100%;"></div>
+            <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
+            <script src="https://cdn.jsdelivr.net/npm/vega-lite@5"></script>
+            <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
+            <script>
+              vegaEmbed(
+                "#pasta-grafik-{hash(str(tablo_ac_gorsel.values.tobytes()))}",
+                {grafik_json},
+                {{"renderer": "svg", "actions": false}}
+              );
+            </script>
+            """
+            components.html(html_kod, height=800, scrolling=False)
 
             st.markdown("##### Detay Tablo")
             st.caption(
