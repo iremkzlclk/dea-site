@@ -1127,18 +1127,19 @@ if "sonuc" in st.session_state:
                 ],
             )
             pasta_dilimleri = taban_kat.mark_arc(
-                innerRadius=75, outerRadius=165, stroke="white", strokeWidth=2.5, cornerRadius=3,
+                innerRadius=130, outerRadius=270, stroke="white", strokeWidth=3, cornerRadius=3,
             )
             yuzde_etiketleri = taban_kat.mark_text(
-                radius=190, fontSize=14, fontWeight="bold", color="#333333",
+                radius=300, fontSize=18, fontWeight="bold", color="#333333",
             ).encode(text=alt.Text("etiket_metni:N"))
 
             pasta = (pasta_dilimleri + yuzde_etiketleri).properties(
-                width=520, height=440,
+                width="container", height=750,
+                padding={"top": 55, "bottom": 15, "left": 15, "right": 15},
                 title=alt.TitleParams(
                     text="Değişkenlerin R²'ye Katkı Payı", subtitle="(mutlak payla ölçeklenmiştir)",
-                    fontSize=18, subtitleFontSize=12, font="Georgia", color="#1F3A5F",
-                    subtitleColor="#666666", anchor="middle",
+                    fontSize=22, subtitleFontSize=14, font="Georgia", color="#1F3A5F",
+                    subtitleColor="#666666", anchor="middle", offset=20,
                 ),
             ).configure_view(strokeWidth=0).configure(background="transparent")
 
