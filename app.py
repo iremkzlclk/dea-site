@@ -243,7 +243,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("DEA + Gecikmeli Malmquist + Panel Veri Analizi")
+st.title("ArGe Verimlilik Analiz Platformu")
 
 with st.expander("Excel sablonu nasil olmali?", expanded=False):
     st.markdown("""
