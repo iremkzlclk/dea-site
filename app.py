@@ -244,89 +244,105 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("ArGe Verimlilik Analiz Platformu")
+st.markdown(
+    "<p style='font-size:1.2rem; color:#666; margin-top:-0.8rem; font-family:Inter,sans-serif;'>"
+    "DEA · Malmquist Endeksi · Panel Veri Analizi</p>",
+    unsafe_allow_html=True,
+)
 
-with st.expander("Excel sablonu nasil olmali?", expanded=False):
-    st.markdown("""
-    Sutunlar (uzun format, her satir bir Donem-DMU kombinasyonu):
+with st.sidebar:
+    st.markdown("## ⚙️ Kontrol Paneli")
+    st.caption("Veri yükleyin, ayarları yapın ve analizi başlatın. Sonuçlar sağdaki sekmelerde görünecek.")
 
-    | Donem | DMU | Girdi_... | Cikti_... |
-    |---|---|---|---|
+    with st.expander("Excel sablonu nasil olmali?", expanded=False):
+        st.markdown("""
+        Sutunlar (uzun format, her satir bir Donem-DMU kombinasyonu):
 
-    - `Girdi_` ile baslayan sutunlar otomatik **girdi**, `Cikti_` ile baslayanlar **cikti** olarak algilanir
-    - Istediginiz kadar Girdi_/Cikti_ sutunu ekleyebilirsiniz
-    - Donemler Excel'de **kronolojik sirada** olmali (t1, t2, t3... veya 2022, 2023, 2024...)
-    - Her donemde ayni DMU seti bulunmali (dengeli panel)
-    """)
-    ornek = pd.DataFrame({
-        "Donem": ["t1", "t1", "t2", "t2"],
-        "DMU": ["A1", "A2", "A1", "A2"],
-        "Girdi_SimSuresi": [382, 334, 400, 310],
-        "Cikti_Hata": [14, 10, 12, 9],
-    })
-    st.dataframe(ornek, use_container_width=True)
+        | Donem | DMU | Girdi_... | Cikti_... |
+        |---|---|---|---|
 
-uploaded = st.file_uploader("Excel dosyanizi yukleyin (.xlsx)", type=["xlsx"])
+        - `Girdi_` ile baslayan sutunlar otomatik **girdi**, `Cikti_` ile baslayanlar **cikti** olarak algilanir
+        - Istediginiz kadar Girdi_/Cikti_ sutunu ekleyebilirsiniz
+        - Donemler Excel'de **kronolojik sirada** olmali (t1, t2, t3... veya 2022, 2023, 2024...)
+        - Her donemde ayni DMU seti bulunmali (dengeli panel)
+        """)
+        ornek = pd.DataFrame({
+            "Donem": ["t1", "t1", "t2", "t2"],
+            "DMU": ["A1", "A2", "A1", "A2"],
+            "Girdi_SimSuresi": [382, 334, 400, 310],
+            "Cikti_Hata": [14, 10, 12, 9],
+        })
+        st.dataframe(ornek, use_container_width=True)
 
-if uploaded is not None:
-    try:
-        veri_onizleme = excel_oku(uploaded)
-        st.success(
-            f"Veri okundu: {len(veri_onizleme['dmu_sirali'])} DMU, "
-            f"{len(veri_onizleme['donem_sirali'])} donem, "
-            f"{len(veri_onizleme['girdi_cols'])} girdi, {len(veri_onizleme['cikti_cols'])} cikti."
-        )
+    uploaded = st.file_uploader("Excel dosyanizi yukleyin (.xlsx)", type=["xlsx"])
 
-        # --- Minimum DMU sayisi kontrolu (yukleme aninda erken uyari) ---
-        kontrol = min_dmu_kontrolu(
-            len(veri_onizleme["girdi_cols"]), len(veri_onizleme["cikti_cols"]),
-            len(veri_onizleme["dmu_sirali"]),
-        )
-        if kontrol["seviye"] == "yeterli":
-            st.info(
-                f"ℹ️ DMU sayınız ({kontrol['n_dmu']}), literatürdeki yaygın kural olan "
-                f"n ≥ max(girdi×çıktı, 3×(girdi+çıktı)) = **{kontrol['onerilen_siki']}** eşiğini "
-                f"karşılıyor ({kontrol['n_girdi']} girdi × {kontrol['n_cikti']} çıktı için)."
-            )
-        elif kontrol["seviye"] == "asgari":
-            st.warning(
-                f"⚠️ DMU sayınız ({kontrol['n_dmu']}), literatürdeki daha sıkı kuralı "
-                f"(n ≥ {kontrol['onerilen_siki']} = max(girdi×çıktı, 3×(girdi+çıktı))) karşılamıyor, "
-                f"ancak daha gevşek asgari kuralın (n ≥ 2×(girdi+çıktı) = {kontrol['onerilen_gevsek']}) "
-                f"üzerinde. Modelin ayrım gücü (discriminatory power) sınırlı olabilir — etkin DMU "
-                f"sayısı orantısız yüksek çıkabilir."
-            )
-        else:
-            st.error(
-                f"🚨 DMU sayınız ({kontrol['n_dmu']}), literatürdeki asgari kuralın bile "
-                f"(n ≥ 2×(girdi+çıktı) = {kontrol['onerilen_gevsek']}) altında kalıyor "
-                f"({kontrol['n_girdi']} girdi, {kontrol['n_cikti']} çıktı için). Bu durumda DEA'nın "
-                f"ayrım gücü ciddi şekilde zayıflar; çoğu DMU yapay olarak 'etkin' çıkabilir. Girdi/çıktı "
-                f"sayısını azaltmayı ya da (mümkünse) DMU sayısını artırmayı değerlendirin."
+    if uploaded is not None:
+        try:
+            veri_onizleme = excel_oku(uploaded)
+            st.success(
+                f"Veri okundu: {len(veri_onizleme['dmu_sirali'])} DMU, "
+                f"{len(veri_onizleme['donem_sirali'])} donem, "
+                f"{len(veri_onizleme['girdi_cols'])} girdi, {len(veri_onizleme['cikti_cols'])} cikti."
             )
 
-        tum_secenekler = veri_onizleme["girdi_cols"] + veri_onizleme["cikti_cols"]
-        bagimsizlar = st.multiselect(
-            "Panel regresyonunda bagimsiz degisken olarak kullanilacak sutunlar",
-            options=tum_secenekler, default=tum_secenekler,
-        )
+            # --- Minimum DMU sayisi kontrolu (yukleme aninda erken uyari) ---
+            kontrol = min_dmu_kontrolu(
+                len(veri_onizleme["girdi_cols"]), len(veri_onizleme["cikti_cols"]),
+                len(veri_onizleme["dmu_sirali"]),
+            )
+            if kontrol["seviye"] == "yeterli":
+                st.info(
+                    f"ℹ️ DMU sayınız ({kontrol['n_dmu']}), literatürdeki yaygın kural olan "
+                    f"n ≥ max(girdi×çıktı, 3×(girdi+çıktı)) = **{kontrol['onerilen_siki']}** eşiğini "
+                    f"karşılıyor ({kontrol['n_girdi']} girdi × {kontrol['n_cikti']} çıktı için)."
+                )
+            elif kontrol["seviye"] == "asgari":
+                st.warning(
+                    f"⚠️ DMU sayınız ({kontrol['n_dmu']}), literatürdeki daha sıkı kuralı "
+                    f"(n ≥ {kontrol['onerilen_siki']} = max(girdi×çıktı, 3×(girdi+çıktı))) karşılamıyor, "
+                    f"ancak daha gevşek asgari kuralın (n ≥ 2×(girdi+çıktı) = {kontrol['onerilen_gevsek']}) "
+                    f"üzerinde. Modelin ayrım gücü (discriminatory power) sınırlı olabilir — etkin DMU "
+                    f"sayısı orantısız yüksek çıkabilir."
+                )
+            else:
+                st.error(
+                    f"🚨 DMU sayınız ({kontrol['n_dmu']}), literatürdeki asgari kuralın bile "
+                    f"(n ≥ 2×(girdi+çıktı) = {kontrol['onerilen_gevsek']}) altında kalıyor "
+                    f"({kontrol['n_girdi']} girdi, {kontrol['n_cikti']} çıktı için). Bu durumda DEA'nın "
+                    f"ayrım gücü ciddi şekilde zayıflar; çoğu DMU yapay olarak 'etkin' çıkabilir. Girdi/çıktı "
+                    f"sayısını azaltmayı ya da (mümkünse) DMU sayısını artırmayı değerlendirin."
+                )
 
-        if st.button("Analizi Calistir", type="primary"):
-            with st.spinner("DEA -> Malmquist -> Panel analizi calistiriliyor..."):
-                uploaded.seek(0)
-                sonuc = run_pipeline(uploaded, bagimsizlar=bagimsizlar)
+            tum_secenekler = veri_onizleme["girdi_cols"] + veri_onizleme["cikti_cols"]
+            bagimsizlar = st.multiselect(
+                "Panel regresyonunda bagimsiz degisken olarak kullanilacak sutunlar",
+                options=tum_secenekler, default=tum_secenekler,
+            )
 
-            st.session_state["sonuc"] = sonuc
-            # Onceki dosyaya ait alt-sekme sonuclarini temizle -- aksi halde farkli bir
-            # DMU/donem setine sahip yeni bir dosya yuklendiginde, eski sonuclar (gelecek
-            # senaryosu, backtest, kararlilik testi) yeni DMU/degisken listesiyle uyusmayip
-            # KeyError'a yol acabilir (secim kutulari yeni veriden, sonuc eskisinden gelir).
-            for eski_anahtar in ["backtest", "rolling_backtest", "kararlilik", "ml_sonuc"]:
-                st.session_state.pop(eski_anahtar, None)
+            if st.button("Analizi Calistir", type="primary"):
+                with st.spinner("DEA -> Malmquist -> Panel analizi calistiriliyor..."):
+                    uploaded.seek(0)
+                    sonuc = run_pipeline(uploaded, bagimsizlar=bagimsizlar)
 
-    except VeriDogrulamaHatasi as e:
-        st.error(f"Veri dogrulama hatasi: {e}")
-    except Exception as e:
-        st.error(f"Beklenmeyen hata: {e}")
+                st.session_state["sonuc"] = sonuc
+                # Onceki dosyaya ait alt-sekme sonuclarini temizle -- aksi halde farkli bir
+                # DMU/donem setine sahip yeni bir dosya yuklendiginde, eski sonuclar (gelecek
+                # senaryosu, backtest, kararlilik testi) yeni DMU/degisken listesiyle uyusmayip
+                # KeyError'a yol acabilir (secim kutulari yeni veriden, sonuc eskisinden gelir).
+                for eski_anahtar in ["backtest", "rolling_backtest", "kararlilik", "ml_sonuc"]:
+                    st.session_state.pop(eski_anahtar, None)
+
+        except VeriDogrulamaHatasi as e:
+            st.error(f"Veri dogrulama hatasi: {e}")
+        except Exception as e:
+            st.error(f"Beklenmeyen hata: {e}")
+
+if "sonuc" not in st.session_state:
+    st.info(
+        "👈 Başlamak için soldaki kontrol panelinden bir Excel dosyası yükleyip "
+        "**Analizi Çalıştır**'a basın. Sonuçlar burada, sekmeler halinde görünecek."
+    )
+
 
 if "sonuc" in st.session_state:
     sonuc = st.session_state["sonuc"]
