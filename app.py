@@ -95,7 +95,7 @@ def excel_indirme_verisi(df_or_obj) -> bytes:
 EXCEL_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
-st.set_page_config(page_title="DEA + Malmquist + Panel Analizi", page_icon="📐", layout="wide")
+st.set_page_config(page_title="ArGe Verimlilik Analiz Platformu", page_icon="📐", layout="wide")
 
 st.markdown("""
 <style>
