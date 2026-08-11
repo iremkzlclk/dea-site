@@ -392,3 +392,73 @@ def leave_one_out_kararlilik(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: 
         "ozet_df": ozet_df, "detay_df": detay_df,
         "basarisiz_dmular": basarisiz,
     }
+
+
+def aciklayicilik_analizi(panel_df: pd.DataFrame, nihai_res, girdi_cols: list, cikti_cols: list,
+                           bagimli: str = "MI") -> dict:
+    """
+    Panel Analizi'ndeki NIHAI modelin (Pooled/FE/RE, hangisi secildiyse) R^2'sini,
+    her bagimsiz degiskenin PAYINA ayirir -- "hangi degisken MI'yi EN IYI
+    aciklyor" sorusuna dogrudan, gorsel bir cevap vermek icin.
+
+    YONTEM: Pratt'in Goreli Onem Olcusu (Pratt, 1987) -- regresyon
+    literaturunde standart, basit bir teknik:
+        Pratt_i = standart_katsayi_i * r_i
+    burada standart_katsayi_i = ham_katsayi_i * (std(X_i) / std(y)) ve
+    r_i = X_i ile y arasindaki Pearson korelasyonu. Bu olcunun onemli bir
+    ozelligi: TUM degiskenlerin Pratt degerlerinin TOPLAMI, modelin R^2'sine
+    ESIT olur (OLS icin tam, FE/RE icin yaklasik) -- yani "R^2'nin ne kadari
+    hangi degiskenden geliyor" sorusuna DOGRUDAN, TUTARLI bir cevap verir.
+
+    ONEMLI SINIRLAMA: Degiskenler birbirleriyle GUCLU korele ise (VIF yuksekse),
+    Pratt degerleri NEGATIF cikabilir ("bastirma etkisi" / suppression) --
+    bu, o degiskenin TEK BASINA degil, DIGERLERIYLE BIRLIKTE bir rol
+    oynadigi anlamina gelir. Pasta grafiginde PAY BUYUKLUGU icin MUTLAK
+    DEGER kullanilir (pasta dilimleri negatif olamaz), ama tablo ve renkte
+    yon (pozitif/negatif) ayrica gosterilir.
+
+    Returns: dict -- yeterli_veri, r_kare (nihai modelin R^2'si),
+             toplam_pratt (Pratt degerlerinin toplami, R^2'ye yakin olmali --
+             tutarlilik kontrolu icin), tablo (DataFrame: degisken, tip,
+             pratt_degeri, pay_yuzde (mutlak, pasta icin), yon)
+    """
+    tum_degiskenler = [d for d in nihai_res.params.index if d != "const"]
+    if not tum_degiskenler:
+        return {"yeterli_veri": False, "mesaj": "Modelde bagimsiz degisken bulunamadi."}
+
+    std_y = panel_df[bagimli].std()
+    if not std_y or std_y < 1e-12:
+        return {"yeterli_veri": False, "mesaj": "Bagimli degiskende (MI) varyasyon yok."}
+
+    satirlar = []
+    for degisken in tum_degiskenler:
+        if degisken not in panel_df.columns:
+            continue
+        ham_katsayi = float(nihai_res.params[degisken])
+        std_x = panel_df[degisken].std()
+        r = panel_df[degisken].corr(panel_df[bagimli])
+        if pd.isna(r) or not std_x or std_x < 1e-12:
+            pratt = 0.0
+        else:
+            standart_katsayi = ham_katsayi * (std_x / std_y)
+            pratt = standart_katsayi * float(r)
+        tip = "Girdi" if degisken in girdi_cols else ("Çıktı" if degisken in cikti_cols else "Diğer")
+        satirlar.append({"degisken": degisken, "tip": tip, "pratt_degeri": round(pratt, 5)})
+
+    tablo = pd.DataFrame(satirlar)
+    toplam_mutlak = tablo["pratt_degeri"].abs().sum()
+    if toplam_mutlak < 1e-12:
+        tablo["pay_yuzde"] = 0.0
+    else:
+        tablo["pay_yuzde"] = (tablo["pratt_degeri"].abs() / toplam_mutlak * 100).round(2)
+    tablo["yon"] = tablo["pratt_degeri"].apply(lambda v: "Pozitif (MI'yi artırıyor)" if v >= 0 else "Negatif (MI'yi azaltıyor)")
+    tablo = tablo.sort_values("pay_yuzde", ascending=False).reset_index(drop=True)
+
+    r_kare = float(getattr(nihai_res, "rsquared", float("nan")))
+
+    return {
+        "yeterli_veri": True,
+        "r_kare": round(r_kare, 4) if pd.notna(r_kare) else None,
+        "toplam_pratt": round(float(tablo["pratt_degeri"].sum()), 4),
+        "tablo": tablo,
+    }

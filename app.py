@@ -6,10 +6,11 @@ Calistirmak icin: streamlit run app.py
 """
 import streamlit as st
 import pandas as pd
+import altair as alt
 import io
 from excel_okuma import excel_oku, donemlere_ayir, VeriDogrulamaHatasi
 from dea_module import min_dmu_kontrolu
-from panel_module import leave_one_out_kararlilik
+from panel_module import leave_one_out_kararlilik, aciklayicilik_analizi
 from pipeline import run_pipeline
 from backtest_module import backtest_calistir, rolling_backtest_calistir
 from ml_module import model_egit, ml_backtest_calistir, ml_rolling_backtest_calistir, ml_yorum_metni, senaryo_tahmin_et, en_iyi_modeli_sec, MODEL_ACIKLAMALARI
@@ -248,8 +249,9 @@ if "sonuc" in st.session_state:
     girdi_cols = sonuc["veri"]["girdi_cols"]
     cikti_cols = sonuc["veri"]["cikti_cols"]
 
-    tab_dea, tab_malmquist, tab_panel, tab_backtest, tab_ml = st.tabs(
-        ["DEA Sonuclari", "Malmquist Sonuclari", "Panel Analizi", "Backtest (Model Dogrulama)", "ML Tahmin"]
+    tab_dea, tab_malmquist, tab_panel, tab_backtest, tab_ml, tab_aciklayici = st.tabs(
+        ["DEA Sonuclari", "Malmquist Sonuclari", "Panel Analizi", "Backtest (Model Dogrulama)",
+         "ML Tahmin", "Açıklayıcılık"]
     )
 
     with tab_dea:
@@ -1040,3 +1042,74 @@ if "sonuc" in st.session_state:
                     st.markdown("##### Değişkenlerin Etkisi (detay)")
                     st.dataframe(mp["katsayilar"], use_container_width=True)
                     st.markdown(ml_yorum_metni(mp, girdi_cols, cikti_cols))
+
+    with tab_aciklayici:
+        st.markdown("### 📊 Açıklayıcılık Analizi — Hangi Değişken En İyi Açıklıyor?")
+        st.markdown("""
+        Panel Analizi sekmesinde gördüğünüz **R²** (modelin MI'deki değişimin ne kadarını
+        açıkladığı), tek bir sayı olarak veriliyordu. Bu sekme, o tek sayıyı **her girdi ve
+        çıktının kendi payına** ayırıyor -- yani *"R²'nin ne kadarı hangi değişkenden geliyor"*
+        sorusuna, bir pasta grafiğiyle görsel bir cevap veriyor.
+
+        **Yöntem:** Her değişken için, katsayısının büyüklüğü ile MI ile olan korelasyonu
+        birlikte değerlendirilerek bir "katkı payı" hesaplanıyor (istatistikte **Pratt'in
+        Göreli Önem Ölçüsü** olarak bilinen, standart bir teknik). Bu payların toplamı,
+        modelin R²'sine yakın çıkar -- yani bu, R²'yi parçalara ayırmanın tutarlı bir yolu.
+
+        ⚠️ **Not:** Değişkenler birbiriyle güçlü korele ise (Panel Analizi'ndeki VIF
+        tablosuna bakın), bir değişkenin payı **negatif** çıkabilir -- bu, o değişkenin
+        TEK BAŞINA değil, DİĞERLERİYLE BİRLİKTE bir rol oynadığı anlamına gelir. Pasta
+        grafiğindeki dilim BÜYÜKLÜĞÜ her zaman mutlak değeri gösterir; yön (pozitif/negatif)
+        ayrıca tablo ve renklerde belirtilir.
+        """)
+
+        p_ac = sonuc["panel_sonuc"]
+        oneri_ac = p_ac["oneri"]
+        tablo_map_ac = {
+            "pooled_robust": p_ac["pooled_robust"], "pooled_clustered": p_ac["pooled_clustered"],
+            "fe_robust": p_ac["fe_robust"], "fe_clustered": p_ac["fe_clustered"],
+            "re_robust": p_ac["re_robust"], "re_clustered": p_ac["re_clustered"],
+        }
+        nihai_res_ac = tablo_map_ac[oneri_ac["sonuc_tablo"]]
+
+        aciklama_sonuc = aciklayicilik_analizi(sonuc["panel_df"], nihai_res_ac, girdi_cols, cikti_cols)
+
+        if not aciklama_sonuc["yeterli_veri"]:
+            st.error(aciklama_sonuc["mesaj"])
+        else:
+            c1, c2 = st.columns(2)
+            c1.metric("Modelin R² değeri (Panel Analizi)", aciklama_sonuc["r_kare"])
+            c2.metric("Payların toplamı (kontrol -- R²'ye yakın olmalı)", aciklama_sonuc["toplam_pratt"])
+
+            tablo_ac = aciklama_sonuc["tablo"]
+            en_iyi = tablo_ac.iloc[0]
+            st.success(
+                f"✅ **En iyi açıklayan değişken: {en_iyi['degisken']}** ({en_iyi['tip']}) -- "
+                f"toplam açıklayıcılığın **%{en_iyi['pay_yuzde']:.1f}**'ini tek başına oluşturuyor "
+                f"({en_iyi['yon']})."
+            )
+
+            st.write("---")
+            renk_skala = alt.Scale(scheme="tableau10")
+            pasta = alt.Chart(tablo_ac).mark_arc(innerRadius=60, outerRadius=160).encode(
+                theta=alt.Theta("pay_yuzde:Q", stack=True),
+                color=alt.Color("degisken:N", scale=renk_skala, legend=alt.Legend(title="Değişken")),
+                tooltip=[
+                    alt.Tooltip("degisken:N", title="Değişken"),
+                    alt.Tooltip("tip:N", title="Tip"),
+                    alt.Tooltip("pay_yuzde:Q", title="Pay (%)", format=".1f"),
+                    alt.Tooltip("yon:N", title="Yön"),
+                ],
+            ).properties(width=500, height=420)
+            st.altair_chart(pasta, use_container_width=True)
+
+            st.markdown("##### Detay Tablo")
+            st.dataframe(
+                tablo_ac[["degisken", "tip", "pay_yuzde", "yon", "pratt_degeri"]],
+                use_container_width=True, hide_index=True,
+            )
+
+            st.download_button(
+                "Açıklayıcılık tablosunu Excel indir", excel_indirme_verisi(tablo_ac),
+                file_name="aciklayicilik_analizi.xlsx", mime=EXCEL_MIME, key="aciklayicilik_csv_dl",
+            )
