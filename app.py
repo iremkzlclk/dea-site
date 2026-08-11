@@ -1224,7 +1224,7 @@ if "sonuc" in st.session_state:
                 padding={"top": 55, "bottom": 15, "left": 40, "right": 40},
                 title=alt.TitleParams(
                     text="Değişkenlerin R²'ye Katkı Payı", subtitle="(mutlak payla ölçeklenmiştir)",
-                    fontSize=22, subtitleFontSize=15, font="Georgia", color="#1F3A5F",
+                    fontSize=24, subtitleFontSize=15, font="Georgia", color="#1F3A5F",
                     subtitleColor="#666666", anchor="middle", offset=20,
                 ),
             ).configure_view(strokeWidth=0).configure(background="transparent")
