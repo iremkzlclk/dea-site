@@ -410,17 +410,29 @@ def aciklayicilik_analizi(panel_df: pd.DataFrame, nihai_res, girdi_cols: list, c
     ESIT olur (OLS icin tam, FE/RE icin yaklasik) -- yani "R^2'nin ne kadari
     hangi degiskenden geliyor" sorusuna DOGRUDAN, TUTARLI bir cevap verir.
 
-    ONEMLI SINIRLAMA: Degiskenler birbirleriyle GUCLU korele ise (VIF yuksekse),
-    Pratt degerleri NEGATIF cikabilir ("bastirma etkisi" / suppression) --
-    bu, o degiskenin TEK BASINA degil, DIGERLERIYLE BIRLIKTE bir rol
-    oynadigi anlamina gelir. Pasta grafiginde PAY BUYUKLUGU icin MUTLAK
-    DEGER kullanilir (pasta dilimleri negatif olamaz), ama tablo ve renkte
-    yon (pozitif/negatif) ayrica gosterilir.
+    ONEMLI AYRIM -- IKI FARKLI "YON" KAVRAMI KARISTIRILMAMALI:
+    1) katsayi_yonu: degiskenin HAM REGRESYON KATSAYISININ isareti -- yani
+       "bu degiskeni artirmak MI'yi artirir mi azaltir mi" sorusunun CEVABI.
+       Bu, Panel Analizi sekmesindeki "gercek_yon" ile HER ZAMAN AYNIDIR.
+    2) katki_turu: PRATT DEGERININ isareti -- degiskenin R^2'ye YAPICI
+       (Uyumlu) mu yoksa BASTIRICI (Suppression) mi katki yaptigi. Bu,
+       katsayi_yonu ile AYNI OLMAK ZORUNDA DEGILDIR: eger degiskenin ham
+       korelasyonu ile regresyon katsayisi ZIT isaretliyse (genelde diger
+       degiskenlerle guclu korelasyon -- yuksek VIF -- oldugunda olur),
+       Pratt degeri katsayinin isaretinden FARKLI cikabilir. Bu durumda
+       degisken bir "bastirici" (suppressor) olarak isaretlenir -- yani
+       modele KENDI etkisinden cok, DIGER degiskenlerin kestirimini
+       netlestirmek icin katkida bulunuyor demektir.
+    ONCEKI SURUMDE bu iki kavram YANLISLIKLA TEK bir "yon" alaninda
+    birlestirilmisti -- bu, Panel Analizi sekmesiyle CELISEN sonuclar
+    gosterebiliyordu (bir degisken katsayisi negatif oldugu halde burada
+    "pozitif" gorunebiliyordu). Artik ayristirildi.
 
     Returns: dict -- yeterli_veri, r_kare (nihai modelin R^2'si),
              toplam_pratt (Pratt degerlerinin toplami, R^2'ye yakin olmali --
              tutarlilik kontrolu icin), tablo (DataFrame: degisken, tip,
-             pratt_degeri, pay_yuzde (mutlak, pasta icin), yon)
+             katsayi, katsayi_yonu, pratt_degeri, pay_yuzde (mutlak, pasta
+             icin), katki_turu)
     """
     tum_degiskenler = [d for d in nihai_res.params.index if d != "const"]
     if not tum_degiskenler:
@@ -443,7 +455,11 @@ def aciklayicilik_analizi(panel_df: pd.DataFrame, nihai_res, girdi_cols: list, c
             standart_katsayi = ham_katsayi * (std_x / std_y)
             pratt = standart_katsayi * float(r)
         tip = "Girdi" if degisken in girdi_cols else ("Çıktı" if degisken in cikti_cols else "Diğer")
-        satirlar.append({"degisken": degisken, "tip": tip, "pratt_degeri": round(pratt, 5)})
+        katsayi_yonu = "Pozitif (MI'yi artırır)" if ham_katsayi >= 0 else "Negatif (MI'yi azaltır)"
+        satirlar.append({
+            "degisken": degisken, "tip": tip, "katsayi": round(ham_katsayi, 6),
+            "katsayi_yonu": katsayi_yonu, "pratt_degeri": round(pratt, 5),
+        })
 
     tablo = pd.DataFrame(satirlar)
     toplam_mutlak = tablo["pratt_degeri"].abs().sum()
@@ -451,7 +467,9 @@ def aciklayicilik_analizi(panel_df: pd.DataFrame, nihai_res, girdi_cols: list, c
         tablo["pay_yuzde"] = 0.0
     else:
         tablo["pay_yuzde"] = (tablo["pratt_degeri"].abs() / toplam_mutlak * 100).round(2)
-    tablo["yon"] = tablo["pratt_degeri"].apply(lambda v: "Pozitif (MI'yi artırıyor)" if v >= 0 else "Negatif (MI'yi azaltıyor)")
+    tablo["katki_turu"] = tablo["pratt_degeri"].apply(
+        lambda v: "Uyumlu (doğrudan katkı)" if v >= 0 else "⚠️ Bastırıcı (suppression)"
+    )
     tablo = tablo.sort_values("pay_yuzde", ascending=False).reset_index(drop=True)
 
     r_kare = float(getattr(nihai_res, "rsquared", float("nan")))

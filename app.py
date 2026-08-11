@@ -1085,27 +1085,73 @@ if "sonuc" in st.session_state:
             en_iyi = tablo_ac.iloc[0]
             st.success(
                 f"✅ **En iyi açıklayan değişken: {en_iyi['degisken']}** ({en_iyi['tip']}) -- "
-                f"toplam açıklayıcılığın **%{en_iyi['pay_yuzde']:.1f}**'ini tek başına oluşturuyor "
-                f"({en_iyi['yon']})."
+                f"toplam açıklayıcılığın **%{en_iyi['pay_yuzde']:.1f}**'ini tek başına oluşturuyor. "
+                f"Katsayı yönü: **{en_iyi['katsayi_yonu']}** (bu, Panel Analizi sekmesindeki katsayı "
+                f"yönüyle her zaman birebir aynıdır)."
             )
+            if "⚠️" in str(en_iyi["katki_turu"]):
+                st.warning(
+                    f"⚠️ Bu değişken bir **bastırıcı (suppressor)** olarak işaretlendi -- yani R²'ye "
+                    f"katkısı, kendi ham korelasyonuyla değil, diğer değişkenlerle birlikte ortaya "
+                    f"çıkıyor. Yüksek pay göstermesi, 'MI'yi güçlü şekilde artırıyor/azaltıyor' anlamına "
+                    f"gelmez -- sadece modele istatistiksel olarak katkı payı büyük demektir. Panel "
+                    f"Analizi sekmesindeki VIF tablosuna bakarak bu değişkenin başka hangi değişkenle "
+                    f"güçlü korele olduğunu kontrol edin."
+                )
 
             st.write("---")
-            renk_skala = alt.Scale(scheme="tableau10")
-            pasta = alt.Chart(tablo_ac).mark_arc(innerRadius=60, outerRadius=160).encode(
-                theta=alt.Theta("pay_yuzde:Q", stack=True),
-                color=alt.Color("degisken:N", scale=renk_skala, legend=alt.Legend(title="Değişken")),
+
+            # Kurumsal/zarif renk paleti (koyu lacivert -> altın -> bordo -> petrol yesili)
+            klas_paleti = ["#1F3A5F", "#C9A227", "#7B2D26", "#2E6F72", "#5B4B8A", "#8C8C8C"]
+            renk_skala = alt.Scale(range=klas_paleti)
+
+            tablo_ac_gorsel = tablo_ac.copy()
+            tablo_ac_gorsel["etiket_metni"] = tablo_ac_gorsel["pay_yuzde"].map(lambda x: f"%{x:.1f}")
+
+            taban_kat = alt.Chart(tablo_ac_gorsel).encode(
+                theta=alt.Theta("pay_yuzde:Q", stack=True, sort="descending"),
+                color=alt.Color(
+                    "degisken:N", scale=renk_skala,
+                    legend=alt.Legend(
+                        title="Değişken", labelFontSize=13, titleFontSize=14,
+                        symbolSize=160, labelLimit=220,
+                    ),
+                ),
+                order=alt.Order("pay_yuzde:Q", sort="descending"),
                 tooltip=[
                     alt.Tooltip("degisken:N", title="Değişken"),
                     alt.Tooltip("tip:N", title="Tip"),
                     alt.Tooltip("pay_yuzde:Q", title="Pay (%)", format=".1f"),
-                    alt.Tooltip("yon:N", title="Yön"),
+                    alt.Tooltip("katsayi_yonu:N", title="Katsayı Yönü"),
+                    alt.Tooltip("katki_turu:N", title="Katkı Türü"),
                 ],
-            ).properties(width=500, height=420)
+            )
+            pasta_dilimleri = taban_kat.mark_arc(
+                innerRadius=75, outerRadius=165, stroke="white", strokeWidth=2.5, cornerRadius=3,
+            )
+            yuzde_etiketleri = taban_kat.mark_text(
+                radius=190, fontSize=14, fontWeight="bold", color="#333333",
+            ).encode(text=alt.Text("etiket_metni:N"))
+
+            pasta = (pasta_dilimleri + yuzde_etiketleri).properties(
+                width=520, height=440,
+                title=alt.TitleParams(
+                    text="Değişkenlerin R²'ye Katkı Payı", subtitle="(mutlak payla ölçeklenmiştir)",
+                    fontSize=18, subtitleFontSize=12, font="Georgia", color="#1F3A5F",
+                    subtitleColor="#666666", anchor="middle",
+                ),
+            ).configure_view(strokeWidth=0).configure(background="transparent")
+
             st.altair_chart(pasta, use_container_width=True)
 
             st.markdown("##### Detay Tablo")
+            st.caption(
+                "**katsayi_yonu:** bu değişkeni artırmak MI'yi artırır mı azaltır mı (Panel Analizi "
+                "ile birebir tutarlı). **katki_turu:** bu değişkenin R²'ye katkısı 'uyumlu' (kendi "
+                "başına anlamlı) mı, yoksa 'bastırıcı' (sadece diğer değişkenlerle birlikte) mi."
+            )
             st.dataframe(
-                tablo_ac[["degisken", "tip", "pay_yuzde", "yon", "pratt_degeri"]],
+                tablo_ac[["degisken", "tip", "katsayi", "katsayi_yonu", "pay_yuzde", "katki_turu", "pratt_degeri"]],
                 use_container_width=True, hide_index=True,
             )
 
