@@ -1221,10 +1221,10 @@ if "sonuc" in st.session_state:
 
             pasta = (pasta_dilimleri + yuzde_etiketleri).properties(
                 width="container", height=750,
-                padding={"top": 90, "bottom": 15, "left": 40, "right": 40},
+                padding={"top": 100, "bottom": 15, "left": 40, "right": 40},
                 title=alt.TitleParams(
                     text="Değişkenlerin R²'ye Katkı Payı", subtitle="(mutlak payla ölçeklenmiştir)",
-                    fontSize=24, subtitleFontSize=15, font="Georgia", color="#1F3A5F",
+                    fontSize=20, subtitleFontSize=15, font="Georgia", color="#1F3A5F",
                     subtitleColor="#666666", anchor="middle", offset=20,
                 ),
             ).configure_view(strokeWidth=0).configure(background="transparent")
