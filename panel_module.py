@@ -46,6 +46,46 @@ def hausman_test(fe_res, re_res):
     return stat, dof, p_value
 
 
+def degisken_varyans_analizi(panel_df: pd.DataFrame, bagimsizlar: list) -> pd.DataFrame:
+    """
+    Her bagimsiz degisken icin, DMU-ici (within) varyansin TOPLAM varyansa
+    oranini hesaplar -- "bu degisken ne kadar zaman-sabit" sorusuna dogrudan,
+    sayisal bir cevap verir. Kullaniciyi tahmin yurutmeye (hangi degiskeni
+    teker teker cikarip deneyeyim) mecbur birakmadan, TUM degiskenleri TEK
+    SEFERDE gorup, en dusuk orana sahip olanlari (zaman-sabit/neredeyse
+    zaman-sabit adaylarini) tespit etmesini saglar.
+
+    Oran ~1.0'a yakinsa: degisken buyuk olcude zaman icinde degisiyor (saglam).
+    Oran ~0'a yakinsa: degisken neredeyse tamamen DMU'lar arasi farkliliktan
+    olusuyor, zaman icinde neredeyse hic degismiyor (riskli -- FE'de tahmin
+    edilemez/dusurulur, Hausman testini bozabilir).
+
+    Returns: DataFrame (index=degisken) -- toplam_varyans, dmu_ici_varyans,
+             within_orani, durum ("Saglam" / "Dikkat" / "Zaman-sabit")
+    """
+    entity_seviyesi = panel_df.index.get_level_values("entity")
+    satirlar = []
+    for degisken in bagimsizlar:
+        if degisken not in panel_df.columns:
+            continue
+        toplam_varyans = panel_df[degisken].var(ddof=0)
+        ici_varyans_ort = panel_df.groupby(entity_seviyesi)[degisken].var(ddof=0).mean()
+        oran = (ici_varyans_ort / toplam_varyans) if toplam_varyans > 1e-12 else 0.0
+        oran = 0.0 if pd.isna(oran) else oran
+        if oran < 0.01:
+            durum = "⚠️ Zaman-sabit (ya da neredeyse)"
+        elif oran < 0.10:
+            durum = "🟡 Dikkat (düşük within-varyans)"
+        else:
+            durum = "✅ Sağlam"
+        satirlar.append({
+            "degisken": degisken, "toplam_varyans": round(float(toplam_varyans), 4),
+            "dmu_ici_varyans": round(float(ici_varyans_ort), 4),
+            "within_orani": round(float(oran), 4), "durum": durum,
+        })
+    return pd.DataFrame(satirlar).set_index("degisken")
+
+
 def mundlak_hausman_testi(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list,
                            alpha: float = ALPHA) -> dict:
     """
@@ -84,13 +124,26 @@ def mundlak_hausman_testi(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: lis
 
     entity_seviyesi = panel_df.index.get_level_values("entity")
 
+    # ONEMLI DUZELTME: mutlak esik (< 1e-10) yerine GORELI esik kullaniyoruz
+    # (DMU-ici varyans / toplam varyans). Boylece sadece TAM zaman-sabit degil,
+    # "neredeyse zaman-sabit" (ornegin olcum hassasiyeti/yuvarlama yuzunden
+    # cok kucuk ama tam sifir olmayan degisim gosteren) degiskenler de
+    # yakalanip testin disinda tutulur -- aksi halde bu tur degiskenler,
+    # genisletilmis RE modelinde NEREDEYSE MUKEMMEL coklu dogrusal baglantiya
+    # (DMU-ortalamasi, degiskenin kendisiyle neredeyse ozdes oldugu icin) yol
+    # acip modelin "full column rank" hatasiyla COKMESINE sebep olabilir --
+    # bu proje sirasinda gercek veride ampirik olarak karsilasilan bir durumdur.
+    GORELI_ESIK = 0.01  # DMU-ici varyans, toplam varyansin %1'inden azsa "zaman-sabit" sayilir
+
     zaman_sabit_degiskenler, degisen_degiskenler = [], []
     ortalama_sutunlari = {}
     for degisken in bagimsizlar:
         if degisken not in panel_df.columns:
             continue
-        ici_varyans = panel_df.groupby(entity_seviyesi)[degisken].var(ddof=0)
-        if (ici_varyans.fillna(0) < 1e-10).all():
+        toplam_varyans = panel_df[degisken].var(ddof=0)
+        ici_varyans_ort = panel_df.groupby(entity_seviyesi)[degisken].var(ddof=0).mean()
+        oran = (ici_varyans_ort / toplam_varyans) if toplam_varyans > 1e-12 else 0.0
+        if pd.isna(oran) or oran < GORELI_ESIK:
             zaman_sabit_degiskenler.append(degisken)
         else:
             degisen_degiskenler.append(degisken)
@@ -100,7 +153,7 @@ def mundlak_hausman_testi(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: lis
     if not degisen_degiskenler:
         return {
             "yeterli_veri": False,
-            "mesaj": "Test edilecek zaman icinde degisen bagimsiz degisken bulunamadi.",
+            "mesaj": "Test edilecek zaman icinde (yeterince) degisen bagimsiz degisken bulunamadi.",
         }
 
     genisletilmis_df = panel_df.copy()
@@ -111,16 +164,80 @@ def mundlak_hausman_testi(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: lis
     tum_regresorler = bagimsizlar + ortalama_adlari
 
     y = genisletilmis_df[[bagimli]]
-    X = genisletilmis_df[tum_regresorler].assign(const=1.0)
 
-    try:
-        re_genis = RandomEffects(y, X).fit()
-    except Exception as e:
-        return {"yeterli_veri": False, "mesaj": f"Genisletilmis RE modeli kurulamadi: {e}"}
+    def _dene(X_deneme, check_rank_kapat):
+        """fit + kovaryans erisimi + istatistik hesabini TEK BLOK olarak dener --
+        check_rank=False ile bile bazen .fit() basariyla dener ama SONRADAN
+        .cov erisiminde (kovaryans matrisi tekil/singular oldugu icin) ayrica
+        cokebiliyor -- bu yuzden ikisi de AYNI guvenlik agi icinde olmali."""
+        if check_rank_kapat:
+            model = RandomEffects(y, X_deneme, check_rank=False).fit()
+        else:
+            model = RandomEffects(y, X_deneme)
+            model = model.fit()
+        b_ = model.params[ortalama_adlari]
+        V_ = model.cov.loc[ortalama_adlari, ortalama_adlari]
+        stat_ = float(b_.T @ np.linalg.pinv(V_.values) @ b_)
+        return stat_
 
-    b = re_genis.params[ortalama_adlari]
-    V = re_genis.cov.loc[ortalama_adlari, ortalama_adlari]
-    stat = float(b.T @ np.linalg.pinv(V.values) @ b)
+    # RANK-EKSIKLIGI GUVENLIK AGI -- IKI KADEMELI:
+    # 1) Once, goreli esigi gecen ama yine de baska degiskenlerle neredeyse
+    #    collinear olan "ortalama" sutunlarini, en dusuk within-orani sirayla
+    #    dusurup tekrar deniyoruz (istatistiksel olarak en temiz cozum).
+    # 2) TUM ortalama sutunlari dusse bile rank sorunu devam ediyorsa (yani
+    #    collinearlik, entity-mean sutunlarindan degil, HAM bagimsizlar
+    #    listesinin kendisinden geliyorsa), kutuphanenin kendi onerdigi
+    #    check_rank=False ile SON bir deneme yapiyoruz -- bu, fonksiyonun
+    #    HICBIR KOSULDA ham bir hatayla cokmemesini garanti eder. Bu son
+    #    care kullanildiginda, sonuc "check_rank_false_kullanildi" bayragiyla
+    #    isaretlenir -- katsayi tahminlerinin sayisal kesinligi bu durumda
+    #    garanti degildir.
+    dusurulen_ekstra = []
+    check_rank_false_kullanildi = False
+    stat = None
+    while stat is None:
+        X = genisletilmis_df[tum_regresorler].assign(const=1.0)
+        try:
+            stat = _dene(X, check_rank_kapat=False)
+            break
+        except Exception as e:
+            if len(ortalama_adlari) > 1:
+                # En dusuk (goreli) ici-varyans oranina sahip degiskeni bul ve dusur
+                oranlar = {}
+                for d in degisen_degiskenler:
+                    tv = panel_df[d].var(ddof=0)
+                    iv = panel_df.groupby(entity_seviyesi)[d].var(ddof=0).mean()
+                    oranlar[d] = (iv / tv) if tv > 1e-12 else 0.0
+                en_dusuk = min(oranlar, key=oranlar.get)
+                dusurulen_ekstra.append(en_dusuk)
+                zaman_sabit_degiskenler.append(en_dusuk)
+                degisen_degiskenler.remove(en_dusuk)
+                ortalama_ad = f"_{en_dusuk}_dmu_ort"
+                del ortalama_sutunlari[ortalama_ad]
+                ortalama_adlari = list(ortalama_sutunlari.keys())
+                tum_regresorler = bagimsizlar + ortalama_adlari
+                continue
+            if not ortalama_adlari:
+                return {
+                    "yeterli_veri": False,
+                    "mesaj": "Rank eksikligi nedeniyle tum degiskenler testten cikarildi, test yapilamadi.",
+                }
+            if not check_rank_false_kullanildi:
+                check_rank_false_kullanildi = True
+                try:
+                    stat = _dene(X, check_rank_kapat=True)
+                    break
+                except Exception as e2:
+                    return {
+                        "yeterli_veri": False,
+                        "mesaj": f"Genisletilmis RE modeli kurulamadi (check_rank=False ile de basarisiz): {e2}",
+                    }
+            else:
+                return {
+                    "yeterli_veri": False,
+                    "mesaj": f"Genisletilmis RE modeli kurulamadi (rank eksikligi cozulemedi): {e}",
+                }
+
     dof = len(ortalama_adlari)
     p_value = 1 - sstats.chi2.cdf(stat, dof)
     secilen_model = "FE" if p_value < alpha else "RE"
@@ -128,8 +245,10 @@ def mundlak_hausman_testi(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: lis
     return {
         "yeterli_veri": True, "stat": round(stat, 4), "dof": dof, "p_value": round(p_value, 4),
         "secilen_model": secilen_model,
+        "dusurulen_rank_eksikligi_nedeniyle": dusurulen_ekstra,
         "test_edilen_degiskenler": degisen_degiskenler,
         "zaman_sabit_degiskenler": zaman_sabit_degiskenler,
+        "check_rank_false_kullanildi": check_rank_false_kullanildi,
     }
 
 
@@ -351,6 +470,7 @@ def run_panel_analysis(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list, 
     # Regresyon-tabanli (Mundlak) Hausman testi -- klasik testin dejenere/negatif
     # cikma riskini yapisal olarak tasimayan bir dogrulama/alternatif.
     mundlak = mundlak_hausman_testi(panel_df, bagimli, bagimsizlar, alpha=alpha)
+    varyans_analizi = degisken_varyans_analizi(panel_df, bagimsizlar)
 
     res_fe_robust = PanelOLS(y, X, entity_effects=True, drop_absorbed=True).fit(cov_type="robust")
     res_fe_clustered = PanelOLS(y, X, entity_effects=True, drop_absorbed=True).fit(cov_type="clustered", cluster_entity=True)
@@ -376,6 +496,7 @@ def run_panel_analysis(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list, 
         "bp_lm": bp_lm,
         "hausman": hausman,
         "mundlak_hausman": mundlak,
+        "varyans_analizi": varyans_analizi,
         "secilen_model": secilen_model,
         "robust": res_robust,
         "clustered": res_clustered,
