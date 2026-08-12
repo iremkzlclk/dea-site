@@ -11,7 +11,7 @@ import streamlit.components.v1 as components
 import io
 from excel_okuma import excel_oku, donemlere_ayir, VeriDogrulamaHatasi
 from dea_module import min_dmu_kontrolu
-from panel_module import leave_one_out_kararlilik, aciklayicilik_analizi
+from panel_module import leave_one_out_kararlilik, aciklayicilik_analizi, degisken_varyans_analizi
 from pipeline import run_pipeline
 from backtest_module import backtest_calistir, rolling_backtest_calistir
 from ml_module import model_egit, ml_backtest_calistir, ml_rolling_backtest_calistir, ml_yorum_metni, senaryo_tahmin_et, en_iyi_modeli_sec, MODEL_ACIKLAMALARI
@@ -558,6 +558,16 @@ if "sonuc" in st.session_state:
                  f"p={p['hausman']['pval']:.4f}")
         st.write(f"**Secilen model:** {p['secilen_model']}")
 
+        if p["hausman"].get("zaman_sabit_disarida_birakildi"):
+            st.info(
+                f"ℹ️ **{', '.join(p['hausman']['zaman_sabit_disarida_birakildi'])}** zaman içinde "
+                f"(neredeyse) hiç değişmediği için, Hausman testi otomatik olarak **sadece** bu "
+                f"değişken(ler) hariç tutularak hesaplandı -- verinizi silmenize gerek kalmadan, "
+                f"elle çıkarıp tekrar denediğinizdeki temiz sonuç burada otomatik elde edildi. "
+                f"(Bu değişkenler, nihai model tablosunda -- FE seçildiyse zaten otomatik "
+                f"düşecekler, RE seçildiyse between-etki olarak görünmeye devam edecekler.)"
+            )
+
         if p["hausman"]["stat"] < 0 or (p["hausman"]["stat"] < 1e-6 and p["hausman"]["pval"] > 0.999):
             st.warning(
                 "⚠️ Klasik Hausman istatistiği negatif ya da dejenere (≈0) çıktı -- bu, genelde "
@@ -575,6 +585,18 @@ if "sonuc" in st.session_state:
                 "hali) kendi kovaryans matrisini kullanır -- bu yüzden **hiçbir zaman negatif çıkamaz**, "
                 "matematiksel olarak garantilidir. Sonuçları farklıysa, bu teste öncelik verin."
             )
+
+            st.markdown("##### Değişken Varyans Analizi — hangi değişken ne kadar zaman-sabit?")
+            st.caption(
+                "**within_orani** sütunu: bu değişkenin DMU-içi (zaman içi) varyansının, toplam "
+                "varyansına oranı. 1'e yakınsa değişken zaman içinde gerçekten değişiyor (sağlam); "
+                "0'a yakınsa neredeyse tamamen DMU'lar arası farktan oluşuyor, zaman içinde neredeyse "
+                "hiç değişmiyor (Hausman testini bozma riski taşır)."
+            )
+            va = p.get("varyans_analizi")
+            if va is not None and not va.empty:
+                st.dataframe(va, use_container_width=True)
+
             if not mh.get("yeterli_veri"):
                 st.error(mh.get("mesaj", "Mundlak testi çalıştırılamadı."))
             else:
@@ -582,12 +604,19 @@ if "sonuc" in st.session_state:
                 st.write(f"**Bu teste göre seçilen model:** {mh['secilen_model']}")
                 if mh["zaman_sabit_degiskenler"]:
                     st.warning(
-                        f"⚠️ **Zaman içinde hiç değişmeyen değişken(ler)** tespit edildi: "
-                        f"{', '.join(mh['zaman_sabit_degiskenler'])}. Bu değişken(ler) testin dışında "
-                        f"tutuldu (matematiksel olarak test edilemezler) -- panel katsayı tablosunda "
-                        f"anlamlı çıksalar bile, bu sadece DMU'lar arası farklılaşmayı (between-etki) "
-                        f"yansıtır; tek bir DMU'nun bu değişkeni değiştirmesinin etkisine dair kanıt "
-                        f"yoktur, senaryo/yatırım analizlerinde kullanılmamalıdır."
+                        f"⚠️ **Zaman içinde hiç değişmeyen (ya da neredeyse) değişken(ler)** tespit "
+                        f"edildi: {', '.join(mh['zaman_sabit_degiskenler'])}. Bu değişken(ler) testin "
+                        f"dışında tutuldu (matematiksel olarak güvenilir test edilemezler) -- panel "
+                        f"katsayı tablosunda anlamlı çıksalar bile, bu sadece DMU'lar arası "
+                        f"farklılaşmayı (between-etki) yansıtır; tek bir DMU'nun bu değişkeni "
+                        f"değiştirmesinin etkisine dair kanıt yoktur, senaryo/yatırım analizlerinde "
+                        f"kullanılmamalıdır."
+                    )
+                if mh.get("dusurulen_rank_eksikligi_nedeniyle"):
+                    st.info(
+                        f"ℹ️ Ek olarak şu değişken(ler), diğer değişkenlerle çok yakın hareket "
+                        f"ettiği için (rank eksikliği riski) testten çıkarıldı: "
+                        f"{', '.join(mh['dusurulen_rank_eksikligi_nedeniyle'])}."
                     )
                 if mh["secilen_model"] != p["secilen_model"]:
                     st.error(
@@ -1075,25 +1104,48 @@ if "sonuc" in st.session_state:
                     "şeyler değil, dönem sonunda ortaya çıkan sonuçlardır."
                 )
 
+                # ÖNEMLİ GÜVENLİK KONTROLÜ: zaman içinde (neredeyse) hiç değişmeyen
+                # girdiler için Artır/Azalt seçeneği burada YAPISAL OLARAK devre dışı
+                # bırakılıyor -- bir katlanır kutudaki pasif uyarıya güvenmek yerine,
+                # kullanıcı diagnostikleri hiç okumasa bile yanlış bir kararı FİİLEN
+                # ALAMAZ hale getiriyoruz. (Panel Analizi sekmesindeki Mundlak testiyle
+                # aynı within/toplam varyans oranı mantığı kullanılıyor.)
+                varyans_analizi_ml = degisken_varyans_analizi(sonuc["panel_df"], girdi_cols)
+                zaman_sabit_girdiler_ml = set(
+                    varyans_analizi_ml[varyans_analizi_ml["within_orani"] < 0.01].index
+                )
+
                 girdi_yuzdeleri = {}
                 for g in girdi_cols:
                     with st.container(border=True):
                         st.write(f"**{g}**")
+                        zaman_sabit_mi = g in zaman_sabit_girdiler_ml
+                        if zaman_sabit_mi:
+                            st.error(
+                                "⛔ Bu girdi, zaman içinde neredeyse hiç değişmiyor (DMU'lar arası "
+                                "farklı ama her DMU kendi içinde sabit kalıyor). Bu tür girdiler için "
+                                "'bunu artırırsam/azaltırsam ne olur' sorusuna dair hiçbir gerçek "
+                                "veri kanıtı yok -- bu yüzden Artır/Azalt seçeneği burada **devre "
+                                "dışı bırakıldı**. Detay için Panel Analizi sekmesindeki Mundlak "
+                                "testi kutusuna bakın."
+                            )
                         cc1, cc2 = st.columns([1, 1])
                         with cc1:
                             yon_secim = st.radio(
                                 "Yön", ["Değiştirme", "Artır", "Azalt"], index=0,
-                                key=f"ml_yon_{g}", horizontal=True,
+                                key=f"ml_yon_{g}", horizontal=True, disabled=zaman_sabit_mi,
                             )
                         with cc2:
-                            if yon_secim != "Değiştirme":
+                            if yon_secim != "Değiştirme" and not zaman_sabit_mi:
                                 yuzde_deger = st.number_input(
                                     "Yüzde (%)", min_value=0.0, max_value=100.0, value=10.0, step=1.0,
                                     key=f"ml_yuzde_{g}",
                                 )
                             else:
                                 yuzde_deger = 0.0
-                        if yon_secim == "Artır":
+                        if zaman_sabit_mi:
+                            girdi_yuzdeleri[g] = 0.0
+                        elif yon_secim == "Artır":
                             girdi_yuzdeleri[g] = yuzde_deger / 100.0
                         elif yon_secim == "Azalt":
                             girdi_yuzdeleri[g] = -yuzde_deger / 100.0

@@ -463,14 +463,44 @@ def run_panel_analysis(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list, 
     except Exception as e:
         bp_lm = {"hata": str(e)}
 
-    h_stat, h_dof, h_pval = hausman_test(res_fe, res_re)
+    # ONEMLI DUZELTME: Hausman testini TUM bagimsizlarla kurulan res_fe/res_re
+    # yerine, SADECE zaman icinde (yeterince) degisen degiskenlerle AYRICA
+    # kurulan FE/RE modelleriyle hesapliyoruz. Neden gerekli: FE, zaman-sabit
+    # bir degiskeni drop_absorbed ile otomatik dusuruyor, AMA RE o degiskeni
+    # HALA regresyonuna dahil ediyor -- bu da RE'nin, KALAN degiskenler icin
+    # urettigi katsayi/kovaryansi, "o degisken hic olmasaydi" durumundan
+    # FARKLI kilar (klasik omitted-variable etkisi). Kullanicinin o degiskeni
+    # ELLE Excel'den/secimden CIKARMASIYLA elde ettigi (temiz) sonuc, iste
+    # tam olarak bu simetriyi saglayan bu yaklasimla, VERIYI HIC SILMEDEN
+    # elde edilir.
+    varyans_analizi = degisken_varyans_analizi(panel_df, bagimsizlar)
+    zaman_sabit_hausman_icin = list(varyans_analizi[varyans_analizi["within_orani"] < 0.01].index)
+    bagimsizlar_hausman = [v for v in bagimsizlar if v not in zaman_sabit_hausman_icin]
+
+    try:
+        if bagimsizlar_hausman and bagimsizlar_hausman != bagimsizlar:
+            X_h = panel_df[bagimsizlar_hausman]
+            Xc_h = add_constant(X_h)
+            res_fe_h = PanelOLS(y, X_h, entity_effects=True, drop_absorbed=True).fit()
+            res_re_h = RandomEffects(y, Xc_h).fit()
+            h_stat, h_dof, h_pval = hausman_test(res_fe_h, res_re_h)
+        else:
+            h_stat, h_dof, h_pval = hausman_test(res_fe, res_re)
+    except Exception:
+        # Guvenlik agi: indirgenmis modelle de kurulamazsa, orijinal (tam
+        # degiskenli) Hausman sonucuna geri don -- hicbir kosulda cokme.
+        h_stat, h_dof, h_pval = hausman_test(res_fe, res_re)
+        zaman_sabit_hausman_icin = []
+
     secilen_model = "FE" if h_pval < alpha else "RE"
-    hausman = {"stat": h_stat, "dof": h_dof, "pval": h_pval}
+    hausman = {
+        "stat": h_stat, "dof": h_dof, "pval": h_pval,
+        "zaman_sabit_disarida_birakildi": zaman_sabit_hausman_icin,
+    }
 
     # Regresyon-tabanli (Mundlak) Hausman testi -- klasik testin dejenere/negatif
     # cikma riskini yapisal olarak tasimayan bir dogrulama/alternatif.
     mundlak = mundlak_hausman_testi(panel_df, bagimli, bagimsizlar, alpha=alpha)
-    varyans_analizi = degisken_varyans_analizi(panel_df, bagimsizlar)
 
     res_fe_robust = PanelOLS(y, X, entity_effects=True, drop_absorbed=True).fit(cov_type="robust")
     res_fe_clustered = PanelOLS(y, X, entity_effects=True, drop_absorbed=True).fit(cov_type="clustered", cluster_entity=True)
