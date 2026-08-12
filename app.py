@@ -245,7 +245,7 @@ st.markdown("""
 
 st.title("ArGe Verimlilik Analiz Platformu")
 st.markdown(
-    "<p style='font-size:1.2rem; color:#666; margin-top:-0.09rem; font-family:Inter,sans-serif;'>"
+    "<p style='font-size:1.2rem; color:#666; margin-top:-0.90rem; font-family:Inter,sans-serif;'>"
     "DEA · Malmquist Endeksi · Panel Veri Analizi</p>",
     unsafe_allow_html=True,
 )
@@ -1155,37 +1155,46 @@ if "sonuc" in st.session_state:
                 senaryo = senaryo_tahmin_et(mp, sonuc, girdi_cols, cikti_cols, girdi_yuzdeleri)
 
                 st.write("---")
-                st.markdown("#### 📈 Bir Sonraki Dönem Tahmini")
+                st.markdown("#### 📈 Bu Kararın Etkisi")
 
                 if all(v == 0 for v in girdi_yuzdeleri.values()):
                     st.info("Henüz bir girdi için Artır/Azalt seçmediniz -- yukarıdan seçim yapın.")
                 else:
                     st.caption(
-                        "**Nasıl hesaplanıyor:** Gerçek son dönem verimliliğinize (MI), "
-                        "seçtiğiniz Artır/Azalt kararının modelin öğrendiği etkisini doğrudan "
-                        "ekliyoruz -- yani *Tahmini gelecek MI = Gerçek son dönem MI + Kararınızın etkisi*."
+                        "**Nasıl hesaplanıyor:** Modelin öğrendiği ilişkiye göre, seçtiğiniz "
+                        "Artır/Azalt kararının verimliliği (MI) doğrudan ne kadar değiştirmesi "
+                        "beklendiğini gösteriyoruz -- \"gelecekte tam olarak nerede olacağım\" gibi "
+                        "ek bir tahmine (doğal trend, vb.) girmeden, sadece **bu kararın kendi "
+                        "etkisini** raporluyoruz. Bu, en az varsayım gerektiren, en sade cevap."
                     )
 
-                    tahmin_yuzde = senaryo["tahmini_degisim_yuzde"]
-                    if tahmin_yuzde is not None and tahmin_yuzde > 0.5:
-                        st.success(f"## ✅ Verimlilik tahmini: %{tahmin_yuzde:+.1f} (artış)")
-                    elif tahmin_yuzde is not None and tahmin_yuzde < -0.5:
-                        st.warning(f"## ⚠️ Verimlilik tahmini: %{tahmin_yuzde:+.1f} (azalış)")
+                    etki_yuzde = senaryo["senaryo_etkisi_yuzde"]
+                    if etki_yuzde is not None and etki_yuzde > 0.5:
+                        st.success(f"## ✅ Bu kararın etkisi: %{etki_yuzde:+.1f} (verimlilik artışı)")
+                    elif etki_yuzde is not None and etki_yuzde < -0.5:
+                        st.warning(f"## ⚠️ Bu kararın etkisi: %{etki_yuzde:+.1f} (verimlilik azalışı)")
                     else:
-                        st.info(f"## Verimlilik tahmini: %{tahmin_yuzde:+.1f} (pratikte değişim yok)")
+                        st.info(f"## Bu kararın etkisi: %{etki_yuzde:+.1f} (pratikte etkisi yok)")
 
-                    c1, c2 = st.columns(2)
-                    c1.metric("Şu anki gerçek verimliliğiniz (MI)", senaryo["son_gercek_ortalama_MI"])
-                    c2.metric("Bu kararla bir sonraki dönem tahmini (MI)", senaryo["tahmini_gelecek_ortalama_MI"])
+                    with st.expander("Bir sonraki dönem için toplam sayısal tahmin (isteğe bağlı)"):
+                        st.caption(
+                            "Bu bölüm, yukarıdaki NET etkiyi, gerçek son dönem değerinize ekleyerek "
+                            "\"bir sonraki dönem tahmini ne olur\" sorusuna da bir sayı veriyor -- "
+                            "ama bu, yukarıdaki net etkiden FARKLI bir soru: burada ayrıca verinizdeki "
+                            "doğal eğilim (trend) de işin içine giriyor, bu yüzden daha fazla varsayım "
+                            "taşıyor."
+                        )
+                        tahmin_yuzde = senaryo["tahmini_degisim_yuzde"]
+                        st.write(f"**Gerçek son döneme göre toplam beklenen değişim:** %{tahmin_yuzde:+.1f}")
+                        c1, c2 = st.columns(2)
+                        c1.metric("Şu anki gerçek verimliliğiniz (MI)", senaryo["son_gercek_ortalama_MI"])
+                        c2.metric("Bir sonraki dönem toplam tahmini (MI)", senaryo["tahmini_gelecek_ortalama_MI"])
 
                     with st.expander("Bu hesaplamanın detayına bakmak isterseniz"):
                         st.caption(
                             "Model, kararınızın etkisini hesaplarken önce 'hiçbir şey değişmeseydi "
-                            "model ne tahmin ederdi' diye bir referans noktası kullanıyor -- ama bu "
-                            "referans noktasının kendisi, sizin gerçek geçmiş verinizden farklı "
-                            "çıkabilir (model, verideki genel eğilimleri öğrendiği için). Bu yüzden "
-                            "biz bu ara adımı sizden gizleyip, doğrudan kararınızın SAF etkisini "
-                            "gerçek son dönem değerinize ekliyoruz -- yukarıdaki sonuç budur."
+                            "model ne tahmin ederdi' diye bir referans noktası kullanıyor. Bu referans "
+                            "noktası ile 'kararınızla' tahmin arasındaki fark, yukarıdaki NET etkiyi verir."
                         )
                         cc1, cc2, cc3 = st.columns(3)
                         cc1.metric("Model referans noktası (hiç değişiklik yapılmasaydı)", senaryo["taban_sifir_degisim_MI"])
