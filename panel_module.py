@@ -22,7 +22,18 @@ ALPHA = 0.05
 
 
 def hausman_test(fe_res, re_res):
-    ortak = [v for v in fe_res.params.index if v in re_res.params.index]
+    """
+    Klasik Hausman testi (matris farki tabanli). NOT: 'const' (sabit terim)
+    karsilastirmadan KASITLI OLARAK CIKARILIR -- standart uygulama budur
+    (orn. Stata'nin hausman komutu), cunku FE ve RE'deki sabit terim kavramsal
+    olarak FARKLI seyler ifade eder (FE'de DMU'lara ozgu etkilerin ortalanmis
+    bir kalintisi, RE'de gercek ortak bir sabit terim). Sabit terimi dahil
+    etmek, ozellikle bir degisken absorbe edilip dusuruldugunde (drop_absorbed),
+    var_diff matrisinin kosegeninde NEGATIF (matematiksel olarak imkansiz bir
+    varyans) degerlere ve dolayisiyla dejenere/negatif Hausman istatistigine
+    yol acabilir -- bu proje sirasinda ampirik olarak dogrulanmis bir durumdur.
+    """
+    ortak = [v for v in fe_res.params.index if v in re_res.params.index and v != "const"]
     b_fe = fe_res.params[ortak]
     b_re = re_res.params[ortak]
     v_fe = fe_res.cov.loc[ortak, ortak]
@@ -33,6 +44,93 @@ def hausman_test(fe_res, re_res):
     dof = len(ortak)
     p_value = 1 - sstats.chi2.cdf(stat, dof)
     return stat, dof, p_value
+
+
+def mundlak_hausman_testi(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list,
+                           alpha: float = ALPHA) -> dict:
+    """
+    Regresyon-tabanli (Mundlak, 1978) Hausman testi -- klasik Hausman testinin
+    (iki AYRI modelin kovaryans matrisini birbirinden CIKARMAKTAN kaynaklanan)
+    negatif/dejenere sonuc riskini YAPISAL OLARAK ORTADAN KALDIRAN bir alternatif.
+
+    YONTEM:
+    1. Zaman icinde DEGISEN her bagimsiz degisken icin, o degiskenin DMU-
+       ortalamasini (x_bar_i) hesapla. (Zaman-sabit degiskenlerin DMU-ortalamasi
+       kendisiyle ozdes oldugu icin -- hep ayni sayi -- bunlar otomatik olarak
+       testin disinda kalir, ayri bir filtreleme gerekmez.)
+    2. RE modeline, orijinal degiskenlerin YANINA bu DMU-ortalamalarini da EK
+       regresor olarak katarak "genisletilmis RE" (Mundlak/CRE -- correlated
+       random effects) modelini kur.
+    3. Eklenen DMU-ortalamasi katsayilarinin TOPLU olarak sifir olup olmadigini
+       bir Wald testiyle sina -- bu, TEK BIR modelin (genisletilmis RE'nin)
+       KENDI kovaryans matrisini kullanir, IKI FARKLI modelin matrisini
+       BIRBIRINDEN CIKARMAZ. Bu yuzden istatistik, TANIM GEREGI negatif
+       CIKAMAZ (gecerli bir kovaryans matrisinden turetilen bir kuadratik
+       form, her zaman >= 0'dir).
+
+    HIPOTEZLER:
+    H0: DMU-ortalamalarinin katsayilari topluca sifir -> c_i (gozlemlenemeyen
+        birim etkisi), regresorlerle korelasyonsuz -> RE gecerli.
+    H1: en az biri sifirdan anlamli farkli -> c_i korelasyonlu -> FE tercih
+        edilmeli.
+
+    Returns: dict -- yeterli_veri, stat, dof, p_value, secilen_model,
+             test_edilen_degiskenler (zaman icinde degisen, teste dahil
+             edilenler), zaman_sabit_degiskenler (otomatik disarida kalanlar,
+             bu degiskenler icin ayrica "sadece between-etki" uyarisi
+             gosterilmelidir)
+    """
+    from linearmodels.panel import RandomEffects
+
+    entity_seviyesi = panel_df.index.get_level_values("entity")
+
+    zaman_sabit_degiskenler, degisen_degiskenler = [], []
+    ortalama_sutunlari = {}
+    for degisken in bagimsizlar:
+        if degisken not in panel_df.columns:
+            continue
+        ici_varyans = panel_df.groupby(entity_seviyesi)[degisken].var(ddof=0)
+        if (ici_varyans.fillna(0) < 1e-10).all():
+            zaman_sabit_degiskenler.append(degisken)
+        else:
+            degisen_degiskenler.append(degisken)
+            ortalama_ad = f"_{degisken}_dmu_ort"
+            ortalama_sutunlari[ortalama_ad] = panel_df.groupby(entity_seviyesi)[degisken].transform("mean")
+
+    if not degisen_degiskenler:
+        return {
+            "yeterli_veri": False,
+            "mesaj": "Test edilecek zaman icinde degisen bagimsiz degisken bulunamadi.",
+        }
+
+    genisletilmis_df = panel_df.copy()
+    for ad, deger in ortalama_sutunlari.items():
+        genisletilmis_df[ad] = deger
+
+    ortalama_adlari = list(ortalama_sutunlari.keys())
+    tum_regresorler = bagimsizlar + ortalama_adlari
+
+    y = genisletilmis_df[[bagimli]]
+    X = genisletilmis_df[tum_regresorler].assign(const=1.0)
+
+    try:
+        re_genis = RandomEffects(y, X).fit()
+    except Exception as e:
+        return {"yeterli_veri": False, "mesaj": f"Genisletilmis RE modeli kurulamadi: {e}"}
+
+    b = re_genis.params[ortalama_adlari]
+    V = re_genis.cov.loc[ortalama_adlari, ortalama_adlari]
+    stat = float(b.T @ np.linalg.pinv(V.values) @ b)
+    dof = len(ortalama_adlari)
+    p_value = 1 - sstats.chi2.cdf(stat, dof)
+    secilen_model = "FE" if p_value < alpha else "RE"
+
+    return {
+        "yeterli_veri": True, "stat": round(stat, 4), "dof": dof, "p_value": round(p_value, 4),
+        "secilen_model": secilen_model,
+        "test_edilen_degiskenler": degisen_degiskenler,
+        "zaman_sabit_degiskenler": zaman_sabit_degiskenler,
+    }
 
 
 def breusch_pagan_lm_test(pooled_res, panel_data):
@@ -250,6 +348,10 @@ def run_panel_analysis(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list, 
     secilen_model = "FE" if h_pval < alpha else "RE"
     hausman = {"stat": h_stat, "dof": h_dof, "pval": h_pval}
 
+    # Regresyon-tabanli (Mundlak) Hausman testi -- klasik testin dejenere/negatif
+    # cikma riskini yapisal olarak tasimayan bir dogrulama/alternatif.
+    mundlak = mundlak_hausman_testi(panel_df, bagimli, bagimsizlar, alpha=alpha)
+
     res_fe_robust = PanelOLS(y, X, entity_effects=True, drop_absorbed=True).fit(cov_type="robust")
     res_fe_clustered = PanelOLS(y, X, entity_effects=True, drop_absorbed=True).fit(cov_type="clustered", cluster_entity=True)
     res_re_robust = RandomEffects(y, Xc).fit(cov_type="robust")
@@ -273,6 +375,7 @@ def run_panel_analysis(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list, 
         "poolability": poolability,
         "bp_lm": bp_lm,
         "hausman": hausman,
+        "mundlak_hausman": mundlak,
         "secilen_model": secilen_model,
         "robust": res_robust,
         "clustered": res_clustered,

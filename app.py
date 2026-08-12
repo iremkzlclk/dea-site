@@ -245,7 +245,7 @@ st.markdown("""
 
 st.title("ArGe Verimlilik Analiz Platformu")
 st.markdown(
-    "<p style='font-size:1.2rem; color:#666; margin-top:-0.08rem; font-family:Inter,sans-serif;'>"
+    "<p style='font-size:1.2rem; color:#666; margin-top:-0.8rem; font-family:Inter,sans-serif;'>"
     "DEA · Malmquist Endeksi · Panel Veri Analizi</p>",
     unsafe_allow_html=True,
 )
@@ -557,6 +557,44 @@ if "sonuc" in st.session_state:
         st.write(f"**Hausman testi:** chi2={p['hausman']['stat']:.4f}, dof={p['hausman']['dof']}, "
                  f"p={p['hausman']['pval']:.4f}")
         st.write(f"**Secilen model:** {p['secilen_model']}")
+
+        if p["hausman"]["stat"] < 0 or (p["hausman"]["stat"] < 1e-6 and p["hausman"]["pval"] > 0.999):
+            st.warning(
+                "⚠️ Klasik Hausman istatistiği negatif ya da dejenere (≈0) çıktı -- bu, genelde "
+                "zaman içinde hiç değişmeyen bir girdi/çıktı değişkeninin (ya da başka bir sayısal "
+                "istikrarsızlığın) testi bozduğunun işareti. Aşağıdaki Mundlak testine güvenin."
+            )
+
+        mh = p.get("mundlak_hausman", {})
+        with st.expander("🔬 Alternatif: Mundlak (regresyon-tabanlı) Hausman testi"):
+            st.caption(
+                "Klasik Hausman testi, iki AYRI modelin (FE ve RE) kovaryans matrisini birbirinden "
+                "çıkararak çalışır -- bu çıkarma işlemi, özellikle zaman-sabit değişkenler varsa, "
+                "matematiksel olarak negatif/dejenere bir sonuç üretebilir. Bu alternatif test "
+                "(Mundlak, 1978), TEK BİR modelin (RE'nin, DMU-ortalamaları eklenerek genişletilmiş "
+                "hali) kendi kovaryans matrisini kullanır -- bu yüzden **hiçbir zaman negatif çıkamaz**, "
+                "matematiksel olarak garantilidir. Sonuçları farklıysa, bu teste öncelik verin."
+            )
+            if not mh.get("yeterli_veri"):
+                st.error(mh.get("mesaj", "Mundlak testi çalıştırılamadı."))
+            else:
+                st.write(f"**Mundlak testi:** chi2={mh['stat']:.4f}, dof={mh['dof']}, p={mh['p_value']:.4f}")
+                st.write(f"**Bu teste göre seçilen model:** {mh['secilen_model']}")
+                if mh["zaman_sabit_degiskenler"]:
+                    st.warning(
+                        f"⚠️ **Zaman içinde hiç değişmeyen değişken(ler)** tespit edildi: "
+                        f"{', '.join(mh['zaman_sabit_degiskenler'])}. Bu değişken(ler) testin dışında "
+                        f"tutuldu (matematiksel olarak test edilemezler) -- panel katsayı tablosunda "
+                        f"anlamlı çıksalar bile, bu sadece DMU'lar arası farklılaşmayı (between-etki) "
+                        f"yansıtır; tek bir DMU'nun bu değişkeni değiştirmesinin etkisine dair kanıt "
+                        f"yoktur, senaryo/yatırım analizlerinde kullanılmamalıdır."
+                    )
+                if mh["secilen_model"] != p["secilen_model"]:
+                    st.error(
+                        f"⚠️ İki test **farklı model** öneriyor (klasik: {p['secilen_model']}, "
+                        f"Mundlak: {mh['secilen_model']}) -- klasik Hausman testi güvenilmez "
+                        f"olabilir, Mundlak testinin sonucuna öncelik verin."
+                    )
 
         oneri = p["oneri"]
         st.write(f"DMU (kume) sayisi: **{p['n_entities']}**")
@@ -1237,10 +1275,10 @@ if "sonuc" in st.session_state:
 
             pasta = (pasta_dilimleri + yuzde_etiketleri).properties(
                 width="container", height=750,
-                padding={"top": 120, "bottom": 15, "left": 40, "right": 40},
+                padding={"top": 55, "bottom": 15, "left": 40, "right": 40},
                 title=alt.TitleParams(
                     text="Değişkenlerin R²'ye Katkı Payı", subtitle="(mutlak payla ölçeklenmiştir)",
-                    fontSize=20, subtitleFontSize=15, font="Georgia", color="#1F3A5F",
+                    fontSize=24, subtitleFontSize=15, font="Georgia", color="#1F3A5F",
                     subtitleColor="#666666", anchor="middle", offset=20,
                 ),
             ).configure_view(strokeWidth=0).configure(background="transparent")
