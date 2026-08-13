@@ -648,45 +648,14 @@ def leave_one_out_kararlilik(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: 
     }
 
 
-def aciklayicilik_analizi(panel_df: pd.DataFrame, nihai_res, girdi_cols: list, cikti_cols: list,
+def aciklayicilik_analizi(panel_df: pd.DataFrame, nihai_res, girdi_cols: list,
                            bagimli: str = "MI") -> dict:
     """
     Panel Analizi'ndeki NIHAI modelin (Pooled/FE/RE, hangisi secildiyse) R^2'sini,
     her bagimsiz degiskenin PAYINA ayirir -- "hangi degisken MI'yi EN IYI
     aciklyor" sorusuna dogrudan, gorsel bir cevap vermek icin.
 
-    YONTEM: Pratt'in Goreli Onem Olcusu (Pratt, 1987) -- regresyon
-    literaturunde standart, basit bir teknik:
-        Pratt_i = standart_katsayi_i * r_i
-    burada standart_katsayi_i = ham_katsayi_i * (std(X_i) / std(y)) ve
-    r_i = X_i ile y arasindaki Pearson korelasyonu. Bu olcunun onemli bir
-    ozelligi: TUM degiskenlerin Pratt degerlerinin TOPLAMI, modelin R^2'sine
-    ESIT olur (OLS icin tam, FE/RE icin yaklasik) -- yani "R^2'nin ne kadari
-    hangi degiskenden geliyor" sorusuna DOGRUDAN, TUTARLI bir cevap verir.
-
-    ONEMLI AYRIM -- IKI FARKLI "YON" KAVRAMI KARISTIRILMAMALI:
-    1) katsayi_yonu: degiskenin HAM REGRESYON KATSAYISININ isareti -- yani
-       "bu degiskeni artirmak MI'yi artirir mi azaltir mi" sorusunun CEVABI.
-       Bu, Panel Analizi sekmesindeki "gercek_yon" ile HER ZAMAN AYNIDIR.
-    2) katki_turu: PRATT DEGERININ isareti -- degiskenin R^2'ye YAPICI
-       (Uyumlu) mu yoksa BASTIRICI (Suppression) mi katki yaptigi. Bu,
-       katsayi_yonu ile AYNI OLMAK ZORUNDA DEGILDIR: eger degiskenin ham
-       korelasyonu ile regresyon katsayisi ZIT isaretliyse (genelde diger
-       degiskenlerle guclu korelasyon -- yuksek VIF -- oldugunda olur),
-       Pratt degeri katsayinin isaretinden FARKLI cikabilir. Bu durumda
-       degisken bir "bastirici" (suppressor) olarak isaretlenir -- yani
-       modele KENDI etkisinden cok, DIGER degiskenlerin kestirimini
-       netlestirmek icin katkida bulunuyor demektir.
-    ONCEKI SURUMDE bu iki kavram YANLISLIKLA TEK bir "yon" alaninda
-    birlestirilmisti -- bu, Panel Analizi sekmesiyle CELISEN sonuclar
-    gosterebiliyordu (bir degisken katsayisi negatif oldugu halde burada
-    "pozitif" gorunebiliyordu). Artik ayristirildi.
-
-    Returns: dict -- yeterli_veri, r_kare (nihai modelin R^2'si),
-             toplam_pratt (Pratt degerlerinin toplami, R^2'ye yakin olmali --
-             tutarlilik kontrolu icin), tablo (DataFrame: degisken, tip,
-             katsayi, katsayi_yonu, pratt_degeri, pay_yuzde (mutlak, pasta
-             icin), katki_turu)
+    YONTEM: Pratt'in Goreli Onem Olcusu (Pratt, 1987).
     """
     tum_degiskenler = [d for d in nihai_res.params.index if d != "const"]
     if not tum_degiskenler:
@@ -708,7 +677,10 @@ def aciklayicilik_analizi(panel_df: pd.DataFrame, nihai_res, girdi_cols: list, c
         else:
             standart_katsayi = ham_katsayi * (std_x / std_y)
             pratt = standart_katsayi * float(r)
-        tip = "Girdi" if degisken in girdi_cols else ("Çıktı" if degisken in cikti_cols else "Diğer")
+            
+        # Çıktı mantığı buradan tamamen kaldırıldı
+        tip = "Girdi" if degisken in girdi_cols else "Operasyonel/Çevresel Faktör"
+        
         katsayi_yonu = "Pozitif (MI'yi artırır)" if ham_katsayi >= 0 else "Negatif (MI'yi azaltır)"
         satirlar.append({
             "degisken": degisken, "tip": tip, "katsayi": round(ham_katsayi, 6),
