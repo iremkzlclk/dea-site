@@ -245,7 +245,7 @@ st.markdown("""
 
 st.title("ArGe Verimlilik Analiz Platformu")
 st.markdown(
-    "<p style='font-size:1.2rem; color:#666; margin-top:-0.09rem; font-family:Inter,sans-serif;'>"
+    "<p style='font-size:1.2rem; color:#666; margin-top:-0.8rem; font-family:Inter,sans-serif;'>"
     "DEA · Malmquist Endeksi · Panel Veri Analizi</p>",
     unsafe_allow_html=True,
 )
@@ -1163,18 +1163,35 @@ if "sonuc" in st.session_state:
                     st.caption(
                         "**Nasıl hesaplanıyor:** Modelin öğrendiği ilişkiye göre, seçtiğiniz "
                         "Artır/Azalt kararının verimliliği (MI) doğrudan ne kadar değiştirmesi "
-                        "beklendiğini gösteriyoruz -- \"gelecekte tam olarak nerede olacağım\" gibi "
-                        "ek bir tahmine (doğal trend, vb.) girmeden, sadece **bu kararın kendi "
-                        "etkisini** raporluyoruz. Bu, en az varsayım gerektiren, en sade cevap."
+                        "beklendiğini gösteriyoruz. Girdi değişince korele çıktının nasıl tepki "
+                        "vereceği KESIN bilinmediği için (tek bir sabit sayı yerine), sonuç artık "
+                        "**bir aralık** olarak veriliyor -- kötümser/en olası/iyimser üç senaryo."
                     )
 
-                    etki_yuzde = senaryo["senaryo_etkisi_yuzde"]
-                    if etki_yuzde is not None and etki_yuzde > 0.5:
-                        st.success(f"## ✅ Bu kararın etkisi: %{etki_yuzde:+.1f} (verimlilik artışı)")
-                    elif etki_yuzde is not None and etki_yuzde < -0.5:
-                        st.warning(f"## ⚠️ Bu kararın etkisi: %{etki_yuzde:+.1f} (verimlilik azalışı)")
+                    etki_alt = senaryo["senaryo_etkisi_yuzde_alt"]
+                    etki_nokta = senaryo["senaryo_etkisi_yuzde_nokta"]
+                    etki_ust = senaryo["senaryo_etkisi_yuzde_ust"]
+
+                    if senaryo["belirsizlik_genis_mi"]:
+                        st.error(
+                            f"⚠️⚠️ **Belirsizlik çok yüksek — yön bile net değil!** Kötümser "
+                            f"senaryoda %{etki_alt:+.1f}, iyimser senaryoda %{etki_ust:+.1f} çıkıyor "
+                            f"-- yani bu değişiklik verimliliği **artırabilir de azaltabilir de**. "
+                            f"Bu kararı, çıktının gerçek tepkisine dair daha güçlü bir kanıt "
+                            f"(örn. gerçek bir pilot uygulama) olmadan **almamanızı öneririz**."
+                        )
+                    elif etki_nokta is not None and etki_nokta > 0.5:
+                        st.success(f"## ✅ Bu kararın etkisi: %{etki_nokta:+.1f} (verimlilik artışı)")
+                    elif etki_nokta is not None and etki_nokta < -0.5:
+                        st.warning(f"## ⚠️ Bu kararın etkisi: %{etki_nokta:+.1f} (verimlilik azalışı)")
                     else:
-                        st.info(f"## Bu kararın etkisi: %{etki_yuzde:+.1f} (pratikte etkisi yok)")
+                        st.info(f"## Bu kararın etkisi: %{etki_nokta:+.1f} (pratikte etkisi yok)")
+
+                    st.caption(
+                        f"**Belirsizlik aralığı (%95):** Kötümser %{etki_alt:+.1f} — "
+                        f"En olası %{etki_nokta:+.1f} — İyimser %{etki_ust:+.1f}"
+                    )
+                    etki_yuzde = etki_nokta  # asagidaki eski kod bloklariyla uyumluluk icin
 
                     with st.expander("Bir sonraki dönem için toplam sayısal tahmin (isteğe bağlı)"):
                         st.caption(

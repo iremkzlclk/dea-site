@@ -178,41 +178,54 @@ def ml_yorum_metni(model_paketi: dict, girdi_cols: list, cikti_cols: list) -> st
     return "\n".join(satirlar)
 
 
-def _girdi_cikti_betalari(sonuc: dict, girdi_cols: list, cikti_cols: list) -> dict:
+def cikti_tahmin_modeli_egit(sonuc: dict, girdi_cols: list, cikti_cols: list) -> dict:
     """
-    Her (girdi, cikti) cifti icin, TUM DMU-donem gozlemleri havuzlanarak
-    (pooled) basit ikili regresyon egimini (beta = Cov(girdi,cikti)/Var(girdi))
-    hesaplar. senaryo_module.py'deki AYNI mantik -- ML tahmin sistemine de
-    tasindi (literatur tutarliligi icin, bkz. senaryo_tahmin_et docstring'i).
+    Her CIKTI icin, o ciktiyi TUM girdilerden (coklu degiskenli, Ridge
+    regresyon) tahmin eden ayri bir model egitir -- eskiden kullanilan
+    basit ikili (bivariate, beta=Cov/Var) yaklasimin YERINE.
 
-    Returns: dict -- {(girdi, cikti): beta}
+    NEDEN GEREKLI (kullanicinin kendi ampirik bulgusuyla dogrulandi):
+    Eski yontem, ciktinin girdiye tepkisini TEK BIR SABIT sayiya (beta)
+    indirgiyordu. Ama bu iliski GERCEKTE BELIRSIZ -- ayni girdi degisimi
+    icin farkli makul carpanlar (orn. 0.98 vs 1.2) denendiginde, nihai
+    Malmquist sonucu TAMAMEN ZIT cikabiliyordu (M=0.96 vs M=1.09). Tek bir
+    "sabit sayi" bu belirsizligi GIZLIYORDU. Bu fonksiyon, hem coklu-
+    degiskenli bir tahmin (TUM girdileri ayni anda hesaba katar, sadece
+    tek bir girdiyle ikili iliskiye bakmaz) hem de bir BELIRSIZLIK OLCUSU
+    (kalintilarin standart sapmasi -- tahminin ne kadar "titrek" oldugunun
+    gostergesi) saglayarak, senaryo_tahmin_et'in ALT/NOKTA/UST olmak uzere
+    UC senaryo uretmesine olanak tanir.
+
+    Returns: dict -- {cikti_adi: {"pipeline": egitilmis Ridge pipeline'i,
+             "kalinti_std": float (tahmin belirsizligi -- ne kadar buyukse,
+             o kadar az guvenilir bir tahmin)}}
     """
-    X, Y = sonuc["X"], sonuc["Y"]
-    donemler = sonuc["veri"]["donem_sirali"]
-    dmu_sirali = sonuc["veri"]["dmu_sirali"]
+    panel_df = sonuc["panel_df"]
+    modeller = {}
+    gecerli_girdiler = [g for g in girdi_cols if g in panel_df.columns]
+    if not gecerli_girdiler:
+        return modeller
 
-    kayitlar = []
-    for donem in donemler:
-        for dmu in dmu_sirali:
-            satir = {}
-            for g in girdi_cols:
-                satir[g] = float(X[donem].loc[dmu, g])
-            for c in cikti_cols:
-                satir[c] = float(Y[donem].loc[dmu, c])
-            kayitlar.append(satir)
-    havuz = pd.DataFrame(kayitlar)
-
-    betalar = {}
-    for g in girdi_cols:
-        var_g = havuz[g].var(ddof=1)
-        for c in cikti_cols:
-            if var_g and var_g > 1e-12:
-                cov_gc = havuz[[g, c]].cov().iloc[0, 1]
-                beta = cov_gc / var_g
-            else:
-                beta = 0.0
-            betalar[(g, c)] = float(beta) if pd.notna(beta) else 0.0
-    return betalar
+    for c in cikti_cols:
+        if c not in panel_df.columns:
+            continue
+        X = panel_df[gecerli_girdiler].to_numpy(dtype=float)
+        y = panel_df[c].to_numpy(dtype=float)
+        try:
+            pipeline = Pipeline([
+                ("olcekleme", StandardScaler()),
+                ("model", RidgeCV(alphas=np.logspace(-3, 3, 50), cv=None)),
+            ])
+            pipeline.fit(X, y)
+            tahminler = pipeline.predict(X)
+            kalintilar = y - tahminler
+            serbestlik = max(len(y) - len(gecerli_girdiler) - 1, 1)
+            kalinti_std = float(np.sqrt(np.sum(kalintilar ** 2) / serbestlik))
+        except Exception:
+            kalinti_std = float(np.std(y)) if len(y) > 1 else 0.0
+            pipeline = None
+        modeller[c] = {"pipeline": pipeline, "kalinti_std": kalinti_std, "girdiler": gecerli_girdiler}
+    return modeller
 
 
 def senaryo_tahmin_et(model_paketi: dict, sonuc: dict, girdi_cols: list, cikti_cols: list,
@@ -223,114 +236,164 @@ def senaryo_tahmin_et(model_paketi: dict, sonuc: dict, girdi_cols: list, cikti_c
     yeniden cozmeden, dogrudan modelin ogrendigi iliskiyi kullanarak
     (bu yuzden ANINDA sonuc verir).
 
-    CIKTI DEGISKENLERI ARTIK SAF SABIT TUTULMUYOR (onemli duzeltme):
-    Bir girdi degistiginde, o girdiyle TARIHSEL OLARAK KORELE olan cikti da,
-    aralarindaki basit dogrusal iliskiye (beta = Cov(girdi,cikti)/Var(girdi),
-    tum panelden hesaplanir) ORANTILI olarak KISMEN hareket eder -- senaryo_
-    module.py'deki (eski DEA tabanli sistem) AYNI mekanizma. Bunun nedeni
-    NEDENSEL CIKARIM literaturunde bilinen bir sorundur: eger cikti,
-    degistirdiginiz girdinin GERCEK bir SONUCUYSA (orn. "sure artinca
-    dogruluk da artar"), onu saf sekilde sabit tutmak "kotu kontrol" (bad
-    control / post-treatment bias) hatasina yol acar ve etkiyi OLDUGUNDAN
-    DUSUK gosterir (bkz. Angrist & Pischke, Mostly Harmless Econometrics).
-    Korelasyonu zayif olan cikti pratikte sabit kalir (beta~0); korelasyonu
-    guclu olan cikti ise girdiyle BIRLIKTE hareket eder. ONEMLI SINIRLAMA:
-    bu basit bir ikili (bivariate) yaklasimdir, tam nedensel bir model
-    DEGILDIR.
+    CIKTI DEGISKENLERI ARTIK COKLU-DEGISKENLI, BELIRSIZLIK-FARKINDALIKLI BIR
+    MODELLE TAHMIN EDILIYOR (onemli guncelleme -- kullanicinin kendi ampirik
+    bulgusuyla motive edildi): Eskiden, bir girdi degisince korele ciktinin
+    ne kadar hareket edecegi TEK BIR SABIT sayiyla (basit ikili beta=Cov/Var)
+    hesaplaniyordu. Ama bu iliski GERCEKTE BELIRSIZ -- ayni girdi degisimi
+    icin farkli makul carpanlar (kullanicinin kendi testinde: 0.98 vs 1.2)
+    TAMAMEN ZIT MI sonuclari verebiliyordu (M=0.96 vs M=1.09). Artik:
+    1) cikti_tahmin_modeli_egit() ile TUM girdilerden (coklu-degiskenli
+       Ridge) her cikti icin bir tahmin modeli VE bir belirsizlik olcusu
+       (kalinti std'si) kuruluyor.
+    2) Senaryo, bu tek bir NOKTA tahmini yerine UC PARALEL versiyon olarak
+       hesaplaniyor: ALT (belirsizlik araliginin kotumser ucu), NOKTA (en
+       olasi tahmin), UST (iyimser ucu) -- boylece "tek bir sabit sayiya"
+       guvenmek yerine, kullaniciya GERCEK BELIRSIZLIGI gosteriyoruz.
 
-    IKI AYRI KARSILASTIRMA dondurulur -- bunlar FARKLI SORULARA cevap verir,
-    birbirine KARISTIRILMAMALIDIR:
+    Cikti degiskenleri, HALA sizin dogrudan Artir/Azalt secebileceginiz bir
+    sey degil -- donem basinda karar verilebilecek degil, donem sonunda
+    gozlemlenen bir sonuc oldugu icin (bkz. modul felsefesi). Ama artik
+    "girdi degisince cikti nasil tepki verir" sorusuna TEK bir cevap yerine
+    bir AKARALIK veriliyor.
 
-    1) senaryo_etkisi_yuzde: SADECE sizin girdi degisikliginizin (+ korele
-       ciktinin kismi tepkisinin) MARJINAL etkisi -- modelin "hicbir sey
-       degismeseydi ne tahmin ederdim" (kendi sifir-degisim tahmini) ile
-       "sizin senaryonuzla ne tahmin ederim" arasindaki fark.
+    IKI AYRI KARSILASTIRMA dondurulur (HER BIRI ARTIK ALT/NOKTA/UST olarak
+    UCLU) -- bunlar FARKLI SORULARA cevap verir, birbirine KARISTIRILMAMALIDIR:
 
-    2) degisim_yuzde: senaryonuzun, GECMISTE GERCEKTEN GERCEKLESMIS (olculmus)
-       son donem MI degerine gore TOPLAM farki (senaryo + dogal trend).
+    1) senaryo_etkisi_yuzde_{alt,nokta,ust}: SADECE sizin girdi degisikliginizin
+       (+ korele ciktinin BELIRSIZ tepkisinin) MARJINAL etkisi.
+    2) degisim_yuzde_{alt,nokta,ust}: senaryonuzun, GERCEK son donem MI
+       degerine gore TOPLAM farki.
 
     girdi_yuzdeleri: dict -- {girdi_adi: yuzde (orn. 0.10 = %10 artis, -0.10 = %10 azalis)}
 
-    Returns: dict -- son_gercek_ortalama_MI, taban_sifir_degisim_MI (modelin
-             kendi "hicbir sey degismeseydi" tahmini), senaryo_ortalama_MI,
-             senaryo_etkisi_yuzde (marjinal etki, madde 1), degisim_yuzde
-             (gercege gore toplam fark, madde 2), detay_df (DMU bazinda)
+    Returns: dict -- son_gercek_ortalama_MI, taban_sifir_degisim_MI,
+             senaryo_etkisi_yuzde (NOKTA tahmini, geriye-uyumluluk icin),
+             senaryo_etkisi_yuzde_alt/nokta/ust (uc senaryo),
+             tahmini_degisim_yuzde_alt/nokta/ust, belirsizlik_genis_mi
+             (bool -- alt ve ust senaryolar ZIT YONDEYSE True, yani "artis
+             mi azalis mi" sorusuna bile guvenilir cevap veremiyoruz demektir),
+             detay_df (DMU bazinda, NOKTA senaryosu icin)
     """
     pipeline = model_paketi["pipeline"]
     son_donem = sonuc["veri"]["donem_sirali"][-1]
     X_son = sonuc["X"][son_donem]
     Y_son = sonuc["Y"][son_donem]
     dmu_sirali = sonuc["veri"]["dmu_sirali"]
-    betalar = _girdi_cikti_betalari(sonuc, girdi_cols, cikti_cols)
+    cikti_modelleri = cikti_tahmin_modeli_egit(sonuc, girdi_cols, cikti_cols)
 
     # Son gecisin GERCEK (olculmus, tahmin edilmemis) MI degerleri
     panel_df = sonuc["panel_df"]
     son_gecis_zamani = sorted(panel_df.index.get_level_values("time").unique())[-1]
     son_gercek_MI = panel_df.xs(son_gecis_zamani, level="time")["MI"]
+    son_gercek_ort = float(gmean(son_gercek_MI.to_numpy()))
 
-    taban_satirlari, senaryo_satirlari = [], []
+    taban_satirlari = []
+    # Uc paralel senaryo: ALT (kotumser cikti tepkisi), NOKTA (en olasi), UST (iyimser)
+    senaryo_satirlari_versiyon = {"alt": [], "nokta": [], "ust": []}
+    detay_satirlar_nokta = []
+
     for dmu in dmu_sirali:
-        satir_taban, satir_senaryo = [], []
-        girdi_deltalari = {}
+        satir_taban = []
+        girdi_yeni_degerler = {}
         for g in girdi_cols:
             deger = float(X_son.loc[dmu, g])
             satir_taban.append(deger)
             yuzde = girdi_yuzdeleri.get(g, 0.0)
-            yeni_deger = deger * (1 + yuzde)
-            satir_senaryo.append(yeni_deger)
-            girdi_deltalari[g] = yeni_deger - deger
+            girdi_yeni_degerler[g] = deger * (1 + yuzde)
         for c in cikti_cols:
-            deger = float(Y_son.loc[dmu, c])
-            satir_taban.append(deger)
-            # Korelasyon-bazli kismi hareket: degisen her girdinin
-            # katkisini (beta x delta_girdi) topla
-            toplam_delta_c = sum(
-                betalar[(g, c)] * girdi_deltalari[g] for g in girdi_cols
-                if abs(girdi_deltalari[g]) > 1e-9
-            )
-            satir_senaryo.append(max(deger + toplam_delta_c, 0.01))  # negatif/sifir engeli
+            satir_taban.append(float(Y_son.loc[dmu, c]))  # taban: cikti GERCEK, degismemis deger
         taban_satirlari.append(satir_taban)
-        senaryo_satirlari.append(satir_senaryo)
 
-    taban_tahminleri = pipeline.predict(np.array(taban_satirlari))  # "hicbir sey degismeseydi"
-    senaryo_tahminleri = pipeline.predict(np.array(senaryo_satirlari))
-    # ML tahmini (regresyon) teorik olarak negatif/sifir da uretebilir (DEA'nin
-    # aksine MI>0 kisitini garanti etmez) -- geometrik ortalama negatif/sifir
-    # degerlerde tanimsiz oldugu icin kucuk bir taban uyguluyoruz.
+        satir_senaryo_v = {"alt": [], "nokta": [], "ust": []}
+        for c in cikti_cols:
+            son_deger_c = float(Y_son.loc[dmu, c])
+            model_bilgi = cikti_modelleri.get(c)
+            if model_bilgi is None or model_bilgi["pipeline"] is None:
+                # Model kurulamadiysa, guvenli bir sekilde SABIT birak (eski davranis)
+                for v in ("alt", "nokta", "ust"):
+                    satir_senaryo_v[v].append(son_deger_c)
+                continue
+
+            model_girdiler = model_bilgi["girdiler"]
+            kalinti_std = model_bilgi["kalinti_std"]
+
+            taban_girdi_vektoru = np.array([[float(X_son.loc[dmu, g]) for g in model_girdiler]])
+            senaryo_girdi_vektoru = np.array([[girdi_yeni_degerler[g] for g in model_girdiler]])
+
+            taban_cikti_tahmin = float(model_bilgi["pipeline"].predict(taban_girdi_vektoru)[0])
+            senaryo_cikti_tahmin_nokta = float(model_bilgi["pipeline"].predict(senaryo_girdi_vektoru)[0])
+            # Modelin tahmini ile ciktinin GERCEK son deger arasindaki fark,
+            # modelin "kalinti"si -- bu farki taban VE senaryo tahminine
+            # ekleyerek, modelin sistematik sapmasini nötrlüyoruz (kalibrasyon).
+            kalibrasyon = son_deger_c - taban_cikti_tahmin
+            cikti_delta_nokta = (senaryo_cikti_tahmin_nokta + kalibrasyon) - son_deger_c
+
+            for v, kat in (("alt", -1.0), ("nokta", 0.0), ("ust", 1.0)):
+                delta = cikti_delta_nokta + kat * 1.96 * kalinti_std
+                yeni_deger = max(son_deger_c + delta, 0.01)
+                satir_senaryo_v[v].append(yeni_deger)
+
+        for v in ("alt", "nokta", "ust"):
+            senaryo_satirlari_versiyon[v].append(satir_senaryo_v[v])
+
+    # Girdi kismini (senaryo degerleriyle) her versiyona ekle
+    tam_senaryo_satirlari = {"alt": [], "nokta": [], "ust": []}
+    for i, dmu in enumerate(dmu_sirali):
+        girdi_kismi = [taban_satirlari[i][j] * (1 + girdi_yuzdeleri.get(g, 0.0)) for j, g in enumerate(girdi_cols)]
+        for v in ("alt", "nokta", "ust"):
+            tam_senaryo_satirlari[v].append(girdi_kismi + senaryo_satirlari_versiyon[v][i])
+
+    taban_tahminleri = pipeline.predict(np.array(taban_satirlari))
     taban_tahminleri_guvenli = np.clip(taban_tahminleri, 0.01, None)
-    senaryo_tahminleri_guvenli = np.clip(senaryo_tahminleri, 0.01, None)
+    taban_ort = float(gmean(taban_tahminleri_guvenli))
 
+    sonuclar_versiyon = {}
+    for v in ("alt", "nokta", "ust"):
+        senaryo_tahminleri = pipeline.predict(np.array(tam_senaryo_satirlari[v]))
+        senaryo_tahminleri_guvenli = np.clip(senaryo_tahminleri, 0.01, None)
+        senaryo_ort = float(gmean(senaryo_tahminleri_guvenli))
+        sonuclar_versiyon[v] = {
+            "senaryo_ort": senaryo_ort,
+            "senaryo_tahminleri": senaryo_tahminleri,
+            "senaryo_etkisi_yuzde": round((senaryo_ort - taban_ort) / taban_ort * 100, 2) if taban_ort else None,
+            "degisim_yuzde": round((senaryo_ort - son_gercek_ort) / son_gercek_ort * 100, 2) if son_gercek_ort else None,
+        }
+
+    # Detay tablosu: NOKTA senaryosu uzerinden (eskisiyle uyumlu format)
+    nokta_tahminleri = sonuclar_versiyon["nokta"]["senaryo_tahminleri"]
     detay = pd.DataFrame({
         "DMU": dmu_sirali,
         "son_gercek_MI": [round(float(son_gercek_MI.get(dmu, np.nan)), 4) for dmu in dmu_sirali],
         "taban_sifir_degisim_MI": np.round(taban_tahminleri, 4),
-        "senaryo_tahmin_MI": np.round(senaryo_tahminleri, 4),
+        "senaryo_tahmin_MI": np.round(nokta_tahminleri, 4),
     })
     detay["senaryo_etkisi"] = (detay["senaryo_tahmin_MI"] - detay["taban_sifir_degisim_MI"]).round(4)
-    # ANA METRIK: gercek son donem degerinize, kararinizin (modelin ogrendigi
-    # ORANTISAL/marjinal) etkisini DOGRUDAN ekliyoruz -- "genel ortalamaya
-    # yakinsama" kavramini KULLANICIYA HIC GOSTERMEDEN. Dogrusal modellerde
-    # (Ridge/Lasso/ElasticNet) bir degisikligin etkisi baslangic noktasindan
-    # BAGIMSIZ SABIT oldugu icin bu matematiksel olarak tam gecerlidir --
-    # "modelin taban tahmini" yerine dogrudan "sizin gercek son donem
-    # degeriniz" cikis noktasi olarak kullanilabilir.
     detay["tahmini_gelecek_MI"] = (detay["son_gercek_MI"] + detay["senaryo_etkisi"]).round(4)
     detay["gercege_gore_fark"] = (detay["senaryo_tahmin_MI"] - detay["son_gercek_MI"]).round(4)
     detay = detay.set_index("DMU")
 
-    son_gercek_ort = float(gmean(son_gercek_MI.to_numpy()))
-    taban_ort = float(gmean(taban_tahminleri_guvenli))
-    senaryo_ort = float(gmean(senaryo_tahminleri_guvenli))
-    tahmini_gelecek_ort = float(gmean(np.clip(detay["tahmini_gelecek_MI"].to_numpy(), 0.01, None)))
+    tahmini_gelecek_ort_nokta = float(gmean(np.clip(detay["tahmini_gelecek_MI"].to_numpy(), 0.01, None)))
+
+    etki_alt = sonuclar_versiyon["alt"]["senaryo_etkisi_yuzde"]
+    etki_ust = sonuclar_versiyon["ust"]["senaryo_etkisi_yuzde"]
+    belirsizlik_genis_mi = (
+        etki_alt is not None and etki_ust is not None and
+        ((etki_alt > 0.5 and etki_ust < -0.5) or (etki_alt < -0.5 and etki_ust > 0.5))
+    )
 
     return {
         "son_gercek_ortalama_MI": round(son_gercek_ort, 4),
         "taban_sifir_degisim_MI": round(taban_ort, 4),
-        "senaryo_ortalama_MI": round(senaryo_ort, 4),
-        "tahmini_gelecek_ortalama_MI": round(tahmini_gelecek_ort, 4),
-        "senaryo_etkisi_yuzde": round((senaryo_ort - taban_ort) / taban_ort * 100, 2) if taban_ort else None,
-        "degisim_yuzde": round((senaryo_ort - son_gercek_ort) / son_gercek_ort * 100, 2) if son_gercek_ort else None,
-        "tahmini_degisim_yuzde": round((tahmini_gelecek_ort - son_gercek_ort) / son_gercek_ort * 100, 2) if son_gercek_ort else None,
+        "senaryo_ortalama_MI": round(sonuclar_versiyon["nokta"]["senaryo_ort"], 4),
+        "tahmini_gelecek_ortalama_MI": round(tahmini_gelecek_ort_nokta, 4),
+        "senaryo_etkisi_yuzde": sonuclar_versiyon["nokta"]["senaryo_etkisi_yuzde"],
+        "degisim_yuzde": sonuclar_versiyon["nokta"]["degisim_yuzde"],
+        "tahmini_degisim_yuzde": sonuclar_versiyon["nokta"]["degisim_yuzde"],
+        "senaryo_etkisi_yuzde_alt": sonuclar_versiyon["alt"]["senaryo_etkisi_yuzde"],
+        "senaryo_etkisi_yuzde_nokta": sonuclar_versiyon["nokta"]["senaryo_etkisi_yuzde"],
+        "senaryo_etkisi_yuzde_ust": sonuclar_versiyon["ust"]["senaryo_etkisi_yuzde"],
+        "belirsizlik_genis_mi": belirsizlik_genis_mi,
         "detay_df": detay,
     }
 
