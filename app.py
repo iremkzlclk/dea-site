@@ -313,16 +313,15 @@ with st.sidebar:
                     f"sayısını azaltmayı ya da (mümkünse) DMU sayısını artırmayı değerlendirin."
                 )
 
-            tum_secenekler = veri_onizleme["girdi_cols"] + veri_onizleme["cikti_cols"]
-            bagimsizlar = st.multiselect(
-                "Panel regresyonunda bagimsiz degisken olarak kullanilacak sutunlar",
-                options=tum_secenekler, default=veri_onizleme["girdi_cols"],
-                help=(
-                    "Varsayılan olarak SADECE girdiler seçili -- çıktıları bağımsız değişken "
-                    "olarak eklemek, girdi-çıktı arasındaki korelasyona bağlı olarak katsayıları "
-                    "bastırma etkisiyle (suppression) bozabilir. Korelasyon/VIF tabloları, bu "
-                    "seçimden bağımsız olarak her zaman girdi+çıktıların hepsini gösterecek."
-                ),
+            # Panel regresyonunda bagimsiz degisken secim kutusu KALDIRILDI --
+            # kullanicinin acik karariyla, panel analizi her zaman SADECE
+            # girdilerle calisir (ciktiyi bagimsiz degisken yapmak, girdi-
+            # cikti korelasyonuna bagli bastirma etkisiyle katsayilari
+            # bozabiliyordu). Bu artik bir secim degil, sabit bir kural.
+            bagimsizlar = veri_onizleme["girdi_cols"]
+            st.caption(
+                f"Panel regresyonu **sadece girdilerle** çalışır: "
+                f"{', '.join(veri_onizleme['girdi_cols'])}"
             )
 
             if st.button("Analizi Calistir", type="primary"):
@@ -571,31 +570,22 @@ if "sonuc" in st.session_state:
                 f"her zaman **⭐ NİHAİ SONUÇ** başlıklı tabloya göre verin."
             )
 
-        if p["hausman"].get("zaman_sabit_disarida_birakildi"):
-            if gercek_nihai_tip == "FE":
-                nihai_not = (
-                    "bu değişken(ler), aşağıdaki ⭐ NİHAİ SONUÇ tablosunda (FE) **otomatik olarak "
-                    "düşecek**, hiç görünmeyecek."
-                )
-            elif gercek_nihai_tip == "RE":
-                nihai_not = (
-                    "bu değişken(ler), aşağıdaki ⭐ NİHAİ SONUÇ tablosunda (RE) **between-etki olarak "
-                    "görünmeye devam edecek** -- katsayısına bakabilirsiniz ama sadece DMU'lar arası "
-                    "farklılaşmayı yansıttığını unutmayın."
-                )
-            else:
-                nihai_not = (
-                    "⚠️ aşağıdaki ⭐ NİHAİ SONUÇ tablosu **Pooled OLS** olduğu için, bu değişken(ler) "
-                    "yine görünecek, ama Pooled OLS zaten within/between ayrımı YAPMADIĞI için bu "
-                    "katsayı, RE'deki between-etkiden bile DAHA AZ yorumlanabilir -- bu değişken(ler)e "
-                    "hiçbir şekilde güvenmeyin."
-                )
+        if p.get("zaman_sabit_tamamen_disarida"):
             st.info(
-                f"ℹ️ **{', '.join(p['hausman']['zaman_sabit_disarida_birakildi'])}** zaman içinde "
-                f"(neredeyse) hiç değişmediği için, Hausman testi otomatik olarak **sadece** bu "
-                f"değişken(ler) hariç tutularak hesaplandı -- verinizi silmenize gerek kalmadan, "
-                f"elle çıkarıp tekrar denediğinizdeki temiz sonuç burada otomatik elde edildi. "
-                f"({nihai_not})"
+                f"ℹ️ **{', '.join(p['zaman_sabit_tamamen_disarida'])}** zaman içinde (neredeyse) "
+                f"hiç değişmediği için, analizin **tamamından** (Pooled OLS, FE, RE, Hausman, "
+                f"⭐ NİHAİ SONUÇ tablosu dahil) **tamamen çıkarıldı** -- hangi model seçilirse "
+                f"seçilsin bu değişken(ler) hiçbir tabloda görünmeyecek. Verinizi silmenize gerek "
+                f"kalmadan, elle çıkarıp tekrar denediğinizdeki temiz sonuç burada otomatik elde edildi."
+            )
+
+        if p.get("hausman_dejenerelik_nedeniyle_cikarilan"):
+            st.warning(
+                f"⚠️ **{', '.join(p['hausman_dejenerelik_nedeniyle_cikarilan'])}** zaman-sabit "
+                f"OLMADIĞI HALDE, Hausman testini negatif/dejenere hale getirdiği tespit edildi "
+                f"(muhtemelen başka bir değişkenle çok yakın hareket ediyor). Bu değişken(ler), "
+                f"testi geçerli/güvenilir hale getirmek için analizin **tamamından** otomatik "
+                f"olarak çıkarıldı -- hiçbir tabloda görünmeyecek."
             )
 
         if p["hausman"]["stat"] < 0 or (p["hausman"]["stat"] < 1e-6 and p["hausman"]["pval"] > 0.999):
@@ -725,94 +715,6 @@ if "sonuc" in st.session_state:
             analiz_df.style.apply(_katsayi_renklendir, axis=1),
             use_container_width=True, hide_index=True,
         )
-
-        # ANA TABLONUN HEMEN ALTINDA, KATLANIR KUTUYA GIZLENMEDEN gorunur uyari:
-        # zaman-sabit (ya da neredeyse) degiskenler burada da isaretleniyor --
-        # sadece Mundlak kutusuna gitmek zorunda kalmadan, kullanici bu tabloyu
-        # okurken bile hangi katsayilarin sadece between-etki oldugunu gorsun.
-        zaman_sabit_va = degisken_varyans_analizi(sonuc["panel_df"], girdi_cols + cikti_cols)
-        zaman_sabit_ana_tablo = set(zaman_sabit_va[zaman_sabit_va["within_orani"] < 0.01].index)
-        tablodaki_zaman_sabitler = [d for d in analiz_df["degisken"] if d in zaman_sabit_ana_tablo]
-        if tablodaki_zaman_sabitler:
-            st.warning(
-                f"⚠️ **{', '.join(tablodaki_zaman_sabitler)}** zaman içinde (neredeyse) hiç "
-                f"değişmiyor. Yukarıdaki tabloda katsayıları görünmeye devam ediyor (Rastgele Etkiler "
-                f"modeli bu tür değişkenleri tahmin edebildiği için) -- ama bu katsayılar **sadece "
-                f"DMU'lar arası farklılaşmayı (between-etki)** yansıtır, tek bir DMU'nun bu değişkeni "
-                f"zaman içinde değiştirmesinin etkisine dair kanıt DEĞİLDİR. Bu yüzden ML Tahmin "
-                f"sekmesinde bu değişkenler için Artır/Azalt seçeneği devre dışı bırakılmıştır."
-            )
-
-        st.write("---")
-        with st.expander("🔀 Karşılaştırma: Sadece Girdi vs Girdi+Çıktı (bağımsız değişken seçimi)"):
-            st.caption(
-                "Şu anki tablo, girdi VE çıktıları BİRLİKTE bağımsız değişken olarak kullanıyor -- "
-                "bu, her değişkenin **KISMİ etkisini** (diğerleri sabitken) veriyor. Eğer amacınız "
-                "sadece \"girdiyi değiştirirsem MI nasıl değişir\" ise (çıktının kendi bulgusuyla "
-                "ilgilenmiyorsanız), SADECE girdilerle kurulan bir model, bu **TOPLAM etkiyi** verir "
-                "ve girdi-çıktı arasındaki olası bastırma etkisini ortadan kaldırır -- ama çıktının "
-                "kendi (DEA-tutarlı olabilecek) bulgusunu kaybedersiniz. Aşağıda ikisini yan yana "
-                "görüp karar verebilirsiniz."
-            )
-            if st.button("Karşılaştırmayı Çalıştır", key="girdi_only_karsilastir_btn"):
-                with st.spinner("Sadece girdi ile panel modeli yeniden kuruluyor..."):
-                    try:
-                        panel_sonuc_girdi = run_panel_analysis(
-                            sonuc["panel_df"], bagimli="MI", bagimsizlar=girdi_cols,
-                        )
-                        oneri_g = panel_sonuc_girdi["oneri"]
-                        tablo_map_g = {
-                            "pooled_robust": panel_sonuc_girdi["pooled_robust"],
-                            "pooled_clustered": panel_sonuc_girdi["pooled_clustered"],
-                            "fe_robust": panel_sonuc_girdi["fe_robust"],
-                            "fe_clustered": panel_sonuc_girdi["fe_clustered"],
-                            "re_robust": panel_sonuc_girdi["re_robust"],
-                            "re_clustered": panel_sonuc_girdi["re_clustered"],
-                        }
-                        nihai_res_g = tablo_map_g[oneri_g["sonuc_tablo"]]
-                        analiz_df_g = panel_aksiyon_analizi(
-                            nihai_res_g, girdi_cols, [], sonuc["panel_df"], alpha=KATSAYI_ALPHA,
-                        )
-                        st.session_state["girdi_only_karsilastirma"] = {
-                            "analiz_df": analiz_df_g, "tip": oneri_g["sonuc_tablo"],
-                        }
-                    except Exception as e:
-                        st.session_state["girdi_only_karsilastirma"] = {"hata": str(e)}
-
-            if "girdi_only_karsilastirma" in st.session_state:
-                kars = st.session_state["girdi_only_karsilastirma"]
-                if "hata" in kars:
-                    st.error(f"Karşılaştırma hesaplanamadı: {kars['hata']}")
-                else:
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        st.markdown("**Şu anki (Girdi + Çıktı) model:**")
-                        st.dataframe(
-                            analiz_df[["degisken", "tip", "katsayi", "p_degeri", "celiski"]],
-                            use_container_width=True, hide_index=True,
-                        )
-                    with c2:
-                        st.markdown(f"**Sadece Girdi model ({kars['tip']}):**")
-                        st.dataframe(
-                            kars["analiz_df"][["degisken", "tip", "katsayi", "p_degeri", "celiski"]],
-                            use_container_width=True, hide_index=True,
-                        )
-                    eski_celiski_sayisi = int(analiz_df["celiski"].sum()) if "celiski" in analiz_df else 0
-                    yeni_celiski_sayisi = int(kars["analiz_df"]["celiski"].sum()) if "celiski" in kars["analiz_df"] else 0
-                    if yeni_celiski_sayisi < eski_celiski_sayisi:
-                        st.success(
-                            f"✅ Sadece Girdi modelinde çelişki sayısı azaldı ({eski_celiski_sayisi} → "
-                            f"{yeni_celiski_sayisi}) -- bu, bastırma etkisinin en azından kısmen "
-                            f"çözüldüğüne işaret ediyor."
-                        )
-                    elif yeni_celiski_sayisi > eski_celiski_sayisi:
-                        st.warning(
-                            f"⚠️ Sadece Girdi modelinde çelişki sayısı **arttı** ({eski_celiski_sayisi} → "
-                            f"{yeni_celiski_sayisi}) -- bu değişiklik bu veri setinde beklendiği gibi "
-                            f"yardımcı olmadı."
-                        )
-                    else:
-                        st.info(f"Çelişki sayısı aynı kaldı ({eski_celiski_sayisi}) -- belirgin bir fark yok.")
 
         anlamli_grafik = analiz_df[analiz_df["anlamli_mi"]].set_index("degisken")["mi_etkisi_yuzde10"]
         if not anlamli_grafik.empty:
