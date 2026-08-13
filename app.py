@@ -11,7 +11,7 @@ import streamlit.components.v1 as components
 import io
 from excel_okuma import excel_oku, donemlere_ayir, VeriDogrulamaHatasi
 from dea_module import min_dmu_kontrolu
-from panel_module import leave_one_out_kararlilik, aciklayicilik_analizi, degisken_varyans_analizi, run_panel_analysis, korelasyon_ve_vif_hesapla, raw_re_modeli_kur
+from panel_module import leave_one_out_kararlilik, aciklayicilik_analizi, degisken_varyans_analizi, run_panel_analysis, korelasyon_ve_vif_hesapla
 from pipeline import run_pipeline
 from backtest_module import backtest_calistir, rolling_backtest_calistir
 from ml_module import model_egit, ml_backtest_calistir, ml_rolling_backtest_calistir, ml_yorum_metni, senaryo_tahmin_et, en_iyi_modeli_sec, MODEL_ACIKLAMALARI
@@ -1315,24 +1315,30 @@ if "sonuc" in st.session_state:
         nihai_res_ac = tablo_map_ac[oneri_ac["sonuc_tablo"]]
 
         # RESMI panel modeli artik SADECE (zaman icinde yeterince degisen) girdilerle
-        # calisiyor -- hem cikti hem zaman-sabit girdiler disarida kalabiliyor, bu
-        # yuzden R² dusuk gorunebiliyor. Sirket ici sunumlarda "R² neden bu kadar
-        # dusuk" sorusunu netlestirmek icin, SADECE BU GRAFIK ICIN, run_panel_analysis'in
-        # otomatik zaman-sabit filtresini ATLAYAN, TUM girdi+ciktiyi (zaman-sabit
-        # olanlar dahil) iceren AYRI bir RE modeli kuruyoruz -- resmi panel
-        # regresyonunu (girdi-only + zaman-sabit filtreli kural) HIC degistirmiyor,
-        # sadece "hepsini eklesek R²'ye ne kadar katkilari olurdu" sorusunu gorsellestiriyor.
+        # calisiyor -- cikti disarida kalabiliyor, bu yuzden R² dusuk gorunebiliyor.
+        # Sirket ici sunumlarda "R² neden bu kadar dusuk" sorusunu netlestirmek icin,
+        # SADECE BU GRAFIK ICIN, ciktiyi da iceren AYRI, TESHIS AMACLI bir model
+        # kuruyoruz -- resmi panel regresyonunu (girdi-only kurali) HIC degistirmiyor,
+        # sadece "ciktiyi eklesek R²'ye ne kadar katkisi olurdu" sorusunu gorsellestiriyor.
+        # NOT: run_panel_analysis kullanildigi icin, zaman-sabit girdiler burada da
+        # (kullanicinin acik tercihiyle) otomatik olarak disarida kalir -- sadece
+        # cikti(lar) eklenir, zaman-sabit girdiler pasta grafiginde GORUNMEZ.
         try:
-            nihai_res_genis = raw_re_modeli_kur(sonuc["panel_df"], "MI", girdi_cols + cikti_cols)
+            panel_sonuc_genis = run_panel_analysis(sonuc["panel_df"], bagimli="MI", bagimsizlar=girdi_cols + cikti_cols)
+            oneri_genis = panel_sonuc_genis["oneri"]
+            tablo_map_genis = {
+                "pooled_robust": panel_sonuc_genis["pooled_robust"], "pooled_clustered": panel_sonuc_genis["pooled_clustered"],
+                "fe_robust": panel_sonuc_genis["fe_robust"], "fe_clustered": panel_sonuc_genis["fe_clustered"],
+                "re_robust": panel_sonuc_genis["re_robust"], "re_clustered": panel_sonuc_genis["re_clustered"],
+            }
+            nihai_res_genis = tablo_map_genis[oneri_genis["sonuc_tablo"]]
             aciklama_sonuc = aciklayicilik_analizi(sonuc["panel_df"], nihai_res_genis, girdi_cols, cikti_cols)
             st.info(
-                "ℹ️ Bu grafik, resmi panel modelinizden (sadece yeterince zaman-içi değişen "
-                "girdilerle çalışır) **farklı** olarak, çıktı(lar)ı VE zaman-sabit olduğu için "
-                "resmi analizden çıkarılan girdi(ler)i de geçici şekilde ekleyen ayrı bir RE "
-                "modeliyle hesaplanmıştır -- **amaç sadece 'bunların R²'ye ne kadar katkısı "
-                "olurdu' sorusunu görselleştirmek.** Resmi panel regresyonunuz (Panel Analizi "
-                "sekmesi, ⭐ NİHAİ SONUÇ) hâlâ sadece geçerli girdilerle çalışır, bu grafik onu "
-                "değiştirmez."
+                "ℹ️ Bu grafik, resmi panel modelinizden (sadece girdilerle çalışır) **farklı** "
+                "olarak, çıktı(lar)ı da geçici şekilde ekleyen ayrı bir modelle hesaplanmıştır -- "
+                "**amaç sadece 'çıktının R²'ye ne kadar katkısı olurdu' sorusunu görselleştirmek.** "
+                "Resmi panel regresyonunuz (Panel Analizi sekmesi, ⭐ NİHAİ SONUÇ) hâlâ sadece "
+                "girdilerle çalışır, bu grafik onu değiştirmez."
             )
         except Exception:
             # Guvenlik agi: genisletilmis model kurulamazsa, resmi (sadece girdi) modele don
