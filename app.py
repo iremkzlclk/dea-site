@@ -11,7 +11,7 @@ import streamlit.components.v1 as components
 import io
 from excel_okuma import excel_oku, donemlere_ayir, VeriDogrulamaHatasi
 from dea_module import min_dmu_kontrolu
-from panel_module import leave_one_out_kararlilik, aciklayicilik_analizi, degisken_varyans_analizi, run_panel_analysis, korelasyon_ve_vif_hesapla
+from panel_module import leave_one_out_kararlilik, aciklayicilik_analizi, degisken_varyans_analizi, run_panel_analysis, korelasyon_ve_vif_hesapla, raw_re_modeli_kur
 from pipeline import run_pipeline
 from backtest_module import backtest_calistir, rolling_backtest_calistir
 from ml_module import model_egit, ml_backtest_calistir, ml_rolling_backtest_calistir, ml_yorum_metni, senaryo_tahmin_et, en_iyi_modeli_sec, MODEL_ACIKLAMALARI
@@ -1314,13 +1314,35 @@ if "sonuc" in st.session_state:
         }
         nihai_res_ac = tablo_map_ac[oneri_ac["sonuc_tablo"]]
 
-        aciklama_sonuc = aciklayicilik_analizi(sonuc["panel_df"], nihai_res_ac, girdi_cols, cikti_cols)
+        # RESMI panel modeli artik SADECE (zaman icinde yeterince degisen) girdilerle
+        # calisiyor -- hem cikti hem zaman-sabit girdiler disarida kalabiliyor, bu
+        # yuzden R² dusuk gorunebiliyor. Sirket ici sunumlarda "R² neden bu kadar
+        # dusuk" sorusunu netlestirmek icin, SADECE BU GRAFIK ICIN, run_panel_analysis'in
+        # otomatik zaman-sabit filtresini ATLAYAN, TUM girdi+ciktiyi (zaman-sabit
+        # olanlar dahil) iceren AYRI bir RE modeli kuruyoruz -- resmi panel
+        # regresyonunu (girdi-only + zaman-sabit filtreli kural) HIC degistirmiyor,
+        # sadece "hepsini eklesek R²'ye ne kadar katkilari olurdu" sorusunu gorsellestiriyor.
+        try:
+            nihai_res_genis = raw_re_modeli_kur(sonuc["panel_df"], "MI", girdi_cols + cikti_cols)
+            aciklama_sonuc = aciklayicilik_analizi(sonuc["panel_df"], nihai_res_genis, girdi_cols, cikti_cols)
+            st.info(
+                "ℹ️ Bu grafik, resmi panel modelinizden (sadece yeterince zaman-içi değişen "
+                "girdilerle çalışır) **farklı** olarak, çıktı(lar)ı VE zaman-sabit olduğu için "
+                "resmi analizden çıkarılan girdi(ler)i de geçici şekilde ekleyen ayrı bir RE "
+                "modeliyle hesaplanmıştır -- **amaç sadece 'bunların R²'ye ne kadar katkısı "
+                "olurdu' sorusunu görselleştirmek.** Resmi panel regresyonunuz (Panel Analizi "
+                "sekmesi, ⭐ NİHAİ SONUÇ) hâlâ sadece geçerli girdilerle çalışır, bu grafik onu "
+                "değiştirmez."
+            )
+        except Exception:
+            # Guvenlik agi: genisletilmis model kurulamazsa, resmi (sadece girdi) modele don
+            aciklama_sonuc = aciklayicilik_analizi(sonuc["panel_df"], nihai_res_ac, girdi_cols, cikti_cols)
 
         if not aciklama_sonuc["yeterli_veri"]:
             st.error(aciklama_sonuc["mesaj"])
         else:
             c1, c2 = st.columns(2)
-            c1.metric("Modelin R² değeri (Panel Analizi)", aciklama_sonuc["r_kare"])
+            c1.metric("Bu grafiğin R² değeri (çıktı dahil, teşhis amaçlı)", aciklama_sonuc["r_kare"])
             c2.metric("Payların toplamı (kontrol -- R²'ye yakın olmalı)", aciklama_sonuc["toplam_pratt"])
 
             tablo_ac = aciklama_sonuc["tablo"]
