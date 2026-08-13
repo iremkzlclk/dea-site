@@ -447,14 +447,140 @@ def korelasyon_ve_vif_hesapla(panel_df: pd.DataFrame, bagimli: str, teshis_degis
     return {"corr": corr, "vif": vif_data}
 
 
+def hausman_dejenerelik_giderici(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list) -> dict:
+    """
+    Zaman-sabit filtrelemesi YAPILDIKTAN SONRA bile, klasik Hausman testi
+    hala negatif ya da dejenere (chi2≈0) cikabilir -- bunun sebebi zaman-
+    sabitlik olmayabilir (orn. iki zaman-icinde-degisen degiskenin birbirine
+    cok yakin hareket etmesi de ayni sorunu yaratabilir). Bu fonksiyon,
+    BU DURUMU AYRICA cozer: Hausman dejenere cikiyorsa, bagimsizlar
+    listesindeki degiskenleri TEKER TEKER cikarip Hausman'i her seferinde
+    yeniden hesaplar, ve HANGI DEGISKENIN cikarilmasi sorunu en iyi
+    cozuyorsa (en yuksek, gecerli/pozitif chi2'yi verıyorsa) o degiskeni
+    KALICI olarak modelden cikarir. Bu islem, hala dejenere sonuc alindigi
+    surece TEKRARLANIR (birden fazla sorunlu degisken olabilir).
+
+    Returns: dict -- bagimsizlar (indirgenmis liste), cikarilan_degiskenler
+             (bu adimda -- zaman-sabitlikten degil, dejenerelik yuzunden --
+             cikarilan degiskenler), son_hausman (stat, dof, pval)
+    """
+    cikarilan_degiskenler = []
+    guvenlik_sayaci = 0
+
+    while len(bagimsizlar) > 1 and guvenlik_sayaci < 10:
+        guvenlik_sayaci += 1
+        y = panel_df[bagimli]
+        X = panel_df[bagimsizlar]
+        Xc = add_constant(X)
+        try:
+            res_fe = PanelOLS(y, X, entity_effects=True, drop_absorbed=True).fit()
+            res_re = RandomEffects(y, Xc).fit()
+            h_stat, h_dof, h_pval = hausman_test(res_fe, res_re)
+        except Exception:
+            break
+
+        dejenere_mi = h_stat < 0 or abs(h_stat) < 1e-6
+        if not dejenere_mi:
+            return {
+                "bagimsizlar": bagimsizlar, "cikarilan_degiskenler": cikarilan_degiskenler,
+                "son_hausman": {"stat": h_stat, "dof": h_dof, "pval": h_pval},
+            }
+
+        # Dejenere -- her degiskeni sirayla cikarip hangisinin en iyi
+        # duzelttigini (en yuksek gecerli chi2'yi verdigini) bul.
+        en_iyi_aday, en_iyi_stat = None, None
+        for aday in bagimsizlar:
+            deneme_liste = [v for v in bagimsizlar if v != aday]
+            if not deneme_liste:
+                continue
+            try:
+                X_d = panel_df[deneme_liste]
+                Xc_d = add_constant(X_d)
+                res_fe_d = PanelOLS(y, X_d, entity_effects=True, drop_absorbed=True).fit()
+                res_re_d = RandomEffects(y, Xc_d).fit()
+                stat_d, _, _ = hausman_test(res_fe_d, res_re_d)
+            except Exception:
+                continue
+            if stat_d >= 0 and abs(stat_d) > 1e-6:
+                if en_iyi_stat is None or stat_d > en_iyi_stat:
+                    en_iyi_aday, en_iyi_stat = aday, stat_d
+
+        if en_iyi_aday is None:
+            # Hicbir tek-degisken cikarma sorunu cozmuyor -- daha fazla
+            # ugrasmadan, mevcut (dejenere) sonucla dur.
+            return {
+                "bagimsizlar": bagimsizlar, "cikarilan_degiskenler": cikarilan_degiskenler,
+                "son_hausman": {"stat": h_stat, "dof": h_dof, "pval": h_pval},
+            }
+
+        cikarilan_degiskenler.append(en_iyi_aday)
+        bagimsizlar = [v for v in bagimsizlar if v != en_iyi_aday]
+
+    # Dongu bitti (tek degisken kaldi ya da guvenlik siniri asildi) --
+    # son durumu hesaplayip dondur.
+    y = panel_df[bagimli]
+    X = panel_df[bagimsizlar]
+    Xc = add_constant(X)
+    try:
+        res_fe = PanelOLS(y, X, entity_effects=True, drop_absorbed=True).fit()
+        res_re = RandomEffects(y, Xc).fit()
+        h_stat, h_dof, h_pval = hausman_test(res_fe, res_re)
+        son_hausman = {"stat": h_stat, "dof": h_dof, "pval": h_pval}
+    except Exception as e:
+        son_hausman = {"hata": str(e)}
+
+    return {
+        "bagimsizlar": bagimsizlar, "cikarilan_degiskenler": cikarilan_degiskenler,
+        "son_hausman": son_hausman,
+    }
+
+
 def run_panel_analysis(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list, alpha: float = ALPHA):
     """
     panel_df: index=['entity','time'], sutunlarda bagimli + bagimsizlar bulunmali
     alpha: TUM karar noktalarinda (Poolability, BP-LM, Hausman, katsayi anlamliligi)
            kullanilan ortak anlamlilik esigi (varsayilan: modul-seviyesi ALPHA).
+
+    ONEMLI: Zaman icinde (neredeyse) hic degismeyen bagimsiz degiskenler, ANALIZIN
+    EN BASINDA, HANGI MODEL (Pooled/FE/RE) SECILIRSE SECILSIN hicbir tabloda
+    GORUNMEYECEK sekilde TAMAMEN cikarilir -- eskiden bu degiskenler sadece
+    Hausman testinden cikarilip, RE secilirse "between-etki" olarak nihai
+    tabloda GORUNMEYE DEVAM EDIYORDU; kullanici bunu (RE her secildiginde
+    degiskenin geri gelmesini) istenmeyen bir davranis olarak degerlendirdi.
+    Artik ML Tahmin sekmesindeki yapisal engelle AYNI felsefe: bu degiskenler
+    modelin HICBIR asamasina (Pooled/FE/RE/Hausman/Mundlak/nihai tablo) hic
+    girmiyor, sadece "zaman_sabit_tamamen_disarida" listesinde raporlaniyor.
+
     Returns: dict -- corr, vif, pooled, fe, re, poolability, hausman,
-                     secilen_model, robust, clustered, comparison, n_entities, oneri
+                     secilen_model, robust, clustered, comparison, n_entities, oneri,
+                     zaman_sabit_tamamen_disarida (bu calistirmada TUM analizden
+                     cikarilan degisken adlari)
     """
+    varyans_on_kontrol = degisken_varyans_analizi(panel_df, bagimsizlar)
+    zaman_sabit_tamamen_disarida = list(
+        varyans_on_kontrol[varyans_on_kontrol["within_orani"] < 0.01].index
+    )
+    bagimsizlar = [v for v in bagimsizlar if v not in zaman_sabit_tamamen_disarida]
+    if not bagimsizlar:
+        raise ValueError(
+            "Tum bagimsiz degiskenler zaman icinde (neredeyse) sabit -- panel analizi "
+            "icin hicbir kullanilabilir degisken kalmadi."
+        )
+
+    # Zaman-sabitlik filtrelemesinden SONRA, hala dejenere (negatif/≈0) bir
+    # Hausman sonucu cikiyorsa (orn. iki zaman-icinde-degisen degiskenin
+    # birbirine cok yakin hareket etmesinden kaynaklanan bir sorun), suclu
+    # degiskeni tespit edip AYRICA modelden cikar -- bu da ML Tahmin ve
+    # nihai tablo dahil TUM analize yansir.
+    dejenerelik_giderici_sonuc = None
+    if len(bagimsizlar) > 1:
+        dejenerelik_giderici_sonuc = hausman_dejenerelik_giderici(panel_df, bagimli, bagimsizlar)
+        if dejenerelik_giderici_sonuc["cikarilan_degiskenler"]:
+            bagimsizlar = dejenerelik_giderici_sonuc["bagimsizlar"]
+    hausman_dejenerelik_nedeniyle_cikarilan = (
+        dejenerelik_giderici_sonuc["cikarilan_degiskenler"] if dejenerelik_giderici_sonuc else []
+    )
+
     y = panel_df[bagimli]
     X = panel_df[bagimsizlar]
     Xc = add_constant(X)
@@ -487,40 +613,13 @@ def run_panel_analysis(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list, 
     except Exception as e:
         bp_lm = {"hata": str(e)}
 
-    # ONEMLI DUZELTME: Hausman testini TUM bagimsizlarla kurulan res_fe/res_re
-    # yerine, SADECE zaman icinde (yeterince) degisen degiskenlerle AYRICA
-    # kurulan FE/RE modelleriyle hesapliyoruz. Neden gerekli: FE, zaman-sabit
-    # bir degiskeni drop_absorbed ile otomatik dusuruyor, AMA RE o degiskeni
-    # HALA regresyonuna dahil ediyor -- bu da RE'nin, KALAN degiskenler icin
-    # urettigi katsayi/kovaryansi, "o degisken hic olmasaydi" durumundan
-    # FARKLI kilar (klasik omitted-variable etkisi). Kullanicinin o degiskeni
-    # ELLE Excel'den/secimden CIKARMASIYLA elde ettigi (temiz) sonuc, iste
-    # tam olarak bu simetriyi saglayan bu yaklasimla, VERIYI HIC SILMEDEN
-    # elde edilir.
-    varyans_analizi = degisken_varyans_analizi(panel_df, bagimsizlar)
-    zaman_sabit_hausman_icin = list(varyans_analizi[varyans_analizi["within_orani"] < 0.01].index)
-    bagimsizlar_hausman = [v for v in bagimsizlar if v not in zaman_sabit_hausman_icin]
-
-    try:
-        if bagimsizlar_hausman and bagimsizlar_hausman != bagimsizlar:
-            X_h = panel_df[bagimsizlar_hausman]
-            Xc_h = add_constant(X_h)
-            res_fe_h = PanelOLS(y, X_h, entity_effects=True, drop_absorbed=True).fit()
-            res_re_h = RandomEffects(y, Xc_h).fit()
-            h_stat, h_dof, h_pval = hausman_test(res_fe_h, res_re_h)
-        else:
-            h_stat, h_dof, h_pval = hausman_test(res_fe, res_re)
-    except Exception:
-        # Guvenlik agi: indirgenmis modelle de kurulamazsa, orijinal (tam
-        # degiskenli) Hausman sonucuna geri don -- hicbir kosulda cokme.
-        h_stat, h_dof, h_pval = hausman_test(res_fe, res_re)
-        zaman_sabit_hausman_icin = []
-
+    # NOT: Zaman-sabit degiskenler artik fonksiyonun EN BASINDA (yukarida)
+    # tum bagimsizlar listesinden zaten cikarildigi icin, res_fe/res_re zaten
+    # SADECE zaman icinde yeterince degisen degiskenlerle kurulmus durumda --
+    # Hausman testi icin ayrica bir indirgeme yapmaya gerek yok.
+    h_stat, h_dof, h_pval = hausman_test(res_fe, res_re)
     secilen_model = "FE" if h_pval < alpha else "RE"
-    hausman = {
-        "stat": h_stat, "dof": h_dof, "pval": h_pval,
-        "zaman_sabit_disarida_birakildi": zaman_sabit_hausman_icin,
-    }
+    hausman = {"stat": h_stat, "dof": h_dof, "pval": h_pval}
 
     # Regresyon-tabanli (Mundlak) Hausman testi -- klasik testin dejenere/negatif
     # cikma riskini yapisal olarak tasimayan bir dogrulama/alternatif.
@@ -550,7 +649,9 @@ def run_panel_analysis(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list, 
         "bp_lm": bp_lm,
         "hausman": hausman,
         "mundlak_hausman": mundlak,
-        "varyans_analizi": varyans_analizi,
+        "varyans_analizi": varyans_on_kontrol,
+        "zaman_sabit_tamamen_disarida": zaman_sabit_tamamen_disarida,
+        "hausman_dejenerelik_nedeniyle_cikarilan": hausman_dejenerelik_nedeniyle_cikarilan,
         "secilen_model": secilen_model,
         "robust": res_robust,
         "clustered": res_clustered,
