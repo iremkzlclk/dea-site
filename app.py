@@ -11,7 +11,7 @@ import streamlit.components.v1 as components
 import io
 from excel_okuma import excel_oku, donemlere_ayir, VeriDogrulamaHatasi
 from dea_module import min_dmu_kontrolu
-from panel_module import leave_one_out_kararlilik, aciklayicilik_analizi, degisken_varyans_analizi, run_panel_analysis
+from panel_module import leave_one_out_kararlilik, aciklayicilik_analizi, degisken_varyans_analizi, run_panel_analysis, korelasyon_ve_vif_hesapla
 from pipeline import run_pipeline
 from backtest_module import backtest_calistir, rolling_backtest_calistir
 from ml_module import model_egit, ml_backtest_calistir, ml_rolling_backtest_calistir, ml_yorum_metni, senaryo_tahmin_et, en_iyi_modeli_sec, MODEL_ACIKLAMALARI
@@ -518,15 +518,21 @@ if "sonuc" in st.session_state:
             "kararlılığı gibi ek testlerle) sınar."
         )
         p = sonuc["panel_sonuc"]
+        # VIF, PANEL REGRESYONUNDA kullanilan (zaman-sabit filtrelenmis) degisken
+        # setinden BAGIMSIZ olarak, TUM orijinal girdilerle (zaman-sabit olanlar
+        # dahil) hesaplanir -- kullanici, cikarilan degiskenin de coklu baglanti
+        # teshisine dahil edilmesini istedi (regresyonun kendisi hala onsuz calisir).
+        teshis_vif = korelasyon_ve_vif_hesapla(sonuc["panel_df"], "MI", girdi_cols)
         st.write("**VIF**")
         st.caption(
             "VIF (Variance Inflation Factor): bir degiskenin, MODELDEKI DIGER degiskenler tarafindan "
             "ne kadar 'aciklanabildigini' gosterir. VIF=1 -> digerleriyle hic ortusmuyor (ideal); "
             "VIF≥5 literaturde genellikle 'coklu dogrusal baglanti sorunu var' esigi olarak kabul "
             "edilir -- bu durumda o degiskenin KENDI etkisini digerlerinden ayirt etmek zorlasir. "
-            "(Panel regresyonunda kullanılan değişkenlere göre hesaplanır.)"
+            "(Bu tablo, panel regresyonundan (zaman-sabit değişkenler nedeniyle) çıkarılmış "
+            "olabilecek girdiler dahil, TÜM girdileri gösterir -- teşhis amaçlıdır.)"
         )
-        st.dataframe(p["vif"].round(3))
+        st.dataframe(teshis_vif["vif"].round(3))
 
         st.caption(
             "Asagidaki uc test, panel veriye hangi modelin (Pooled OLS / Sabit Etkiler-FE / Rastgele "
