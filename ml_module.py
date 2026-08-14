@@ -610,3 +610,86 @@ def en_iyi_modeli_sec(panel_df: pd.DataFrame, bagimsizlar: list, bagimli: str = 
         "basarili": True, "secilen_model": secilen["model"],
         "gerekce": gerekce, "karsilastirma_df": karsilastirma_df,
     }
+
+
+def gelecek_donem_dea_senaryo(sonuc: dict, girdi_cols: list, cikti_cols: list,
+                               girdi_yuzdeleri: dict, cikti_modelleri: dict = None) -> dict:
+    """
+    ML TAHMIN SEKMESININ YENI TEMEL MEKANIZMASI -- eski (regresyon-tahminli)
+    senaryo_tahmin_et'in YERINE gecer. Farki: MI'yi bir ML modelinden DOGRUDAN
+    TAHMIN ETMEK yerine, GERCEK bir "sonraki donem" verisi insa edip, bu yeni
+    donem ile SON GERCEK donem arasinda GERCEKTEN DEA + Malmquist COZER --
+    yani sonuc, istatistiksel bir yaklastirma degil, DEA'nin kendi
+    optimizasyonunun DOGRUDAN cikisi.
+
+    ADIMLAR:
+    1) Kullanicinin sectigi girdi yuzde degisiklikleri, SON DONEMIN gercek
+       girdi degerlerine uygulanarak yeni bir "senaryo" donemi kurulur.
+    2) Ciktilar, cikti_tahmin_modeli_egit() ile egitilen coklu-degiskenli
+       (TUM girdilerden, Ridge) modelle, yeni girdi degerlerine gore
+       yeniden tahmin edilir -- boylece ciktilar da girdilerle TUTARLI
+       sekilde hareket eder (saf sabit tutulmaz).
+    3) Bu YENI donem + SON GERCEK donem birlikte, malmquist_module.solve_malmquist
+       fonksiyonuna verilir -- GERCEK bir DEA/Malmquist LP cozumu yapilir.
+    4) Sonucta EC (etkinlik degisimi), TC (sinir/teknoloji degisimi) ve
+       M=EC*TC (toplam verimlilik degisimi), DMU bazinda ve ortalama olarak
+       donuyor.
+
+    girdi_yuzdeleri: dict -- {girdi_adi: yuzde (orn. 0.10 = %10 artis)}
+    cikti_modelleri: onceden egitilmisse tekrar egitmemek icin verilebilir
+                     (cikti_tahmin_modeli_egit() ciktisi)
+
+    Returns: dict -- detay_df (DMU bazinda EC/TC/M), ortalama_EC, ortalama_TC,
+             ortalama_M, degisim_yuzde (ortalama_M'in %1'den sapmasi),
+             X_senaryo, Y_senaryo (olusturulan yeni donem verisi, seffaflik icin)
+    """
+    from dea_module import solve_dea_period  # noqa: F401 (dogrudan kullanilmiyor, solve_malmquist icinde)
+    from malmquist_module import solve_malmquist
+
+    son_donem = sonuc["veri"]["donem_sirali"][-1]
+    X_son = sonuc["X"][son_donem]
+    Y_son = sonuc["Y"][son_donem]
+
+    if cikti_modelleri is None:
+        cikti_modelleri = cikti_tahmin_modeli_egit(sonuc, girdi_cols, cikti_cols)
+
+    # 1) Yeni "senaryo" girdi donemi
+    X_senaryo = X_son.copy()
+    for g in girdi_cols:
+        yuzde = girdi_yuzdeleri.get(g, 0.0)
+        X_senaryo[g] = X_son[g] * (1 + yuzde)
+
+    # 2) Yeni "senaryo" cikti donemi -- coklu-degiskenli model + kalibrasyon
+    Y_senaryo = Y_son.copy()
+    for c in cikti_cols:
+        model_bilgi = cikti_modelleri.get(c)
+        if model_bilgi is None or model_bilgi["pipeline"] is None:
+            continue  # model kurulamadiysa, cikti sabit kalir (guvenli varsayilan)
+        model_girdiler = model_bilgi["girdiler"]
+        taban_tahmin = model_bilgi["pipeline"].predict(X_son[model_girdiler].to_numpy(dtype=float))
+        senaryo_tahmin = model_bilgi["pipeline"].predict(X_senaryo[model_girdiler].to_numpy(dtype=float))
+        # Kalibrasyon: modelin GERCEK son deger ile kendi tahmini arasindaki
+        # sapmasini nötrler -- boylece sadece GIRDI DEGISIMININ etkisi tasinir.
+        kalibrasyon = Y_son[c].to_numpy(dtype=float) - taban_tahmin
+        yeni_deger = senaryo_tahmin + kalibrasyon
+        Y_senaryo[c] = np.clip(yeni_deger, 0.01, None)
+
+    # 3) GERCEK DEA + Malmquist cozumu -- son gercek donem ile yeni senaryo donemi arasinda
+    X = {son_donem: X_son, "senaryo": X_senaryo}
+    Y = {son_donem: Y_son, "senaryo": Y_senaryo}
+    malmquist_sonuc = solve_malmquist(X, Y, periods=[son_donem, "senaryo"])
+
+    detay = malmquist_sonuc.xs(son_donem, level="donem")[["EC", "TC", "M"]].round(4)
+
+    ort_EC = float(gmean(detay["EC"].to_numpy()))
+    ort_TC = float(gmean(detay["TC"].to_numpy()))
+    ort_M = float(gmean(detay["M"].to_numpy()))
+
+    return {
+        "detay_df": detay,
+        "ortalama_EC": round(ort_EC, 4),
+        "ortalama_TC": round(ort_TC, 4),
+        "ortalama_M": round(ort_M, 4),
+        "degisim_yuzde": round((ort_M - 1.0) * 100, 2),
+        "X_senaryo": X_senaryo, "Y_senaryo": Y_senaryo,
+    }

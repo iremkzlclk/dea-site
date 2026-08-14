@@ -14,7 +14,7 @@ from dea_module import min_dmu_kontrolu
 from panel_module import leave_one_out_kararlilik, aciklayicilik_analizi, degisken_varyans_analizi, run_panel_analysis, korelasyon_ve_vif_hesapla
 from pipeline import run_pipeline
 from backtest_module import backtest_calistir, rolling_backtest_calistir
-from ml_module import model_egit, ml_backtest_calistir, ml_rolling_backtest_calistir, ml_yorum_metni, senaryo_tahmin_et, en_iyi_modeli_sec, MODEL_ACIKLAMALARI
+from ml_module import gelecek_donem_dea_senaryo
 from yorumlama import (
     malmquist_yorum_metni,
     malmquist_donem_ortalamasi,
@@ -245,7 +245,7 @@ st.markdown("""
 
 st.title("ArGe Verimlilik Analiz Platformu")
 st.markdown(
-    "<p style='font-size:1.2rem; color:#666; margin-top:-0.09rem; font-family:Inter,sans-serif;'>"
+    "<p style='font-size:1.2rem; color:#666; margin-top:-0.8rem; font-family:Inter,sans-serif;'>"
     "DEA · Malmquist Endeksi · Panel Veri Analizi</p>",
     unsafe_allow_html=True,
 )
@@ -1072,219 +1072,125 @@ if "sonuc" in st.session_state:
         st.markdown("### 🔮 Gelecek Dönem Tahmini")
         st.markdown("""
         **Bu sayfa ne yapar?** Her girdi için **Artır/Azalt** seçip bir yüzde yazarsınız
-        ("bu girdiyi %X artırırsam/azaltırsam"). Sistem, geçmiş verinizden öğrenilmiş bir
-        modelle, bir sonraki dönem için **verimliliğin ne kadar değişmesinin beklendiğini**
-        hesaplar.
+        ("bu girdiyi %X artırırsam/azaltırsam"). Sistem bu değişikliklerle **yeni, varsayımsal
+        bir "sonraki dönem" verisi kurar** -- girdileriniz sizin seçtiğiniz kadar değişir, çıktılar
+        ise (doğruluk, prototip sayısı vb.) geçmiş verinizdeki girdi-çıktı ilişkisine göre **otomatik
+        olarak** hareket eder (sabit tutulmaz).
 
-        Model seçimini siz yapmıyorsunuz -- tıpkı Panel Analizi sekmesinde en uygun istatistiksel
-        modelin (Pooled/FE/RE) otomatik seçilmesi gibi, burada da **4 farklı tahmin modeli
-        arka planda denenip, geçmişi en isabetli tahmin eden otomatik seçilir.**
+        Sonra bu yeni dönem ile **son gerçek döneminiz** arasında **gerçekten DEA + Malmquist
+        endeksi çözülür** -- yani sonuç, bir istatistiksel tahmin değil, **DEA'nın kendi
+        optimizasyonunun doğrudan çıktısı.** Bu, Malmquist Sonuçları sekmenizdeki hesaplamayla
+        **aynı yöntemi** kullanır, sadece "sonraki dönem" gerçek değil, sizin senaryonuz.
         """)
 
-        bagimsizlar_ml = girdi_cols + cikti_cols
+        st.write("---")
+        st.markdown("#### 🎛️ Girdilerinizi Ayarlayın")
+        st.caption(
+            "Her girdi için yön (Artır/Azalt) seçip yüzdeyi yazın. Çıktılar (doğruluk, "
+            "prototip sayısı vb.) burada elle seçilemez -- girdi değişikliğinize göre "
+            "otomatik olarak hesaplanır, çünkü bunlar dönem sonunda ortaya çıkan sonuçlardır."
+        )
 
-        if st.button("Modeli Hazırla", type="primary", key="ml_calistir_btn"):
-            with st.spinner("4 farklı model deneniyor, geçmişi en iyi tahmin eden seçiliyor..."):
-                try:
-                    secim = en_iyi_modeli_sec(sonuc["panel_df"], bagimsizlar_ml)
-                    if not secim["basarili"]:
-                        st.session_state["ml_sonuc"] = {"hata": secim["mesaj"]}
-                    else:
-                        model_secim = secim["secilen_model"]
-                        st.session_state["ml_sonuc"] = {
-                            "model_tipi": model_secim,
-                            "secim_gerekce": secim["gerekce"],
-                            "secim_karsilastirma": secim["karsilastirma_df"],
-                            "model_paketi": model_egit(sonuc["panel_df"], bagimsizlar_ml, model_secim),
-                            "backtest": ml_backtest_calistir(sonuc["panel_df"], bagimsizlar_ml, model_secim),
-                            "rolling": ml_rolling_backtest_calistir(sonuc["panel_df"], bagimsizlar_ml, model_secim),
-                            "hata": None,
-                        }
-                except Exception as e:
-                    st.session_state["ml_sonuc"] = {"hata": str(e)}
+        # Zaman-sabit girdilerde Artir/Azalt'i yapisal olarak devre disi birak (ML Tahmin
+        # sekmesindeki ayni guvenlik onlemi -- degisken_varyans_analizi kullanarak).
+        varyans_analizi_ml = degisken_varyans_analizi(sonuc["panel_df"], girdi_cols)
+        zaman_sabit_girdiler_ml = set(
+            varyans_analizi_ml[varyans_analizi_ml["within_orani"] < 0.01].index
+        )
 
-        if "ml_sonuc" in st.session_state:
-            ml = st.session_state["ml_sonuc"]
-
-            if ml.get("hata"):
-                st.error(f"❌ Model kurulamadı. Hata detayı (bunu paylaşırsanız hemen düzeltebilirim):\n\n`{ml['hata']}`")
-            else:
-                mp = ml["model_paketi"]
-
-                st.write("---")
-                st.success(f"✅ {ml['secim_gerekce']}")
-                with st.expander("4 modelin karşılaştırması (şeffaflık için)"):
-                    st.dataframe(ml["secim_karsilastirma"], use_container_width=True, hide_index=True)
-                    st.caption(
-                        "Bazı modellerde (özellikle Lasso/ElasticNet) bir girdinin etkisi TAM SIFIR "
-                        "çıkabilir -- bu durumda o girdiyi ne kadar değiştirirseniz değiştirin tahmin "
-                        "hiç değişmez. Bu bir hata değil, modelin 'bu girdinin etkisi güvenilir değil' "
-                        "demesinin bir yoludur. Otomatik seçim, böyle bir riski taşıyan modelleri elemeye çalışır."
+        girdi_yuzdeleri = {}
+        for g in girdi_cols:
+            with st.container(border=True):
+                st.write(f"**{g}**")
+                zaman_sabit_mi = g in zaman_sabit_girdiler_ml
+                if zaman_sabit_mi:
+                    st.error(
+                        "⛔ Bu girdi, zaman içinde neredeyse hiç değişmiyor (DMU'lar arası "
+                        "farklı ama her DMU kendi içinde sabit kalıyor). Bu tür girdiler için "
+                        "'bunu artırırsam/azaltırsam ne olur' sorusuna dair hiçbir gerçek "
+                        "veri kanıtı yok -- bu yüzden Artır/Azalt seçeneği burada **devre "
+                        "dışı bırakıldı**."
                     )
-
-                st.write("---")
-                st.markdown("#### 🎛️ Girdilerinizi Ayarlayın")
-                st.caption(
-                    "Her girdi için yön (Artır/Azalt) seçip yüzdeyi yazın. Çıktılar (doğruluk, "
-                    "prototip sayısı vb.) sabit tutulur -- çünkü bunlar sizin karar verebileceğiniz "
-                    "şeyler değil, dönem sonunda ortaya çıkan sonuçlardır."
-                )
-
-                # ÖNEMLİ GÜVENLİK KONTROLÜ: zaman içinde (neredeyse) hiç değişmeyen
-                # girdiler için Artır/Azalt seçeneği burada YAPISAL OLARAK devre dışı
-                # bırakılıyor -- bir katlanır kutudaki pasif uyarıya güvenmek yerine,
-                # kullanıcı diagnostikleri hiç okumasa bile yanlış bir kararı FİİLEN
-                # ALAMAZ hale getiriyoruz. (Panel Analizi sekmesindeki Mundlak testiyle
-                # aynı within/toplam varyans oranı mantığı kullanılıyor.)
-                varyans_analizi_ml = degisken_varyans_analizi(sonuc["panel_df"], girdi_cols)
-                zaman_sabit_girdiler_ml = set(
-                    varyans_analizi_ml[varyans_analizi_ml["within_orani"] < 0.01].index
-                )
-
-                girdi_yuzdeleri = {}
-                for g in girdi_cols:
-                    with st.container(border=True):
-                        st.write(f"**{g}**")
-                        zaman_sabit_mi = g in zaman_sabit_girdiler_ml
-                        if zaman_sabit_mi:
-                            st.error(
-                                "⛔ Bu girdi, zaman içinde neredeyse hiç değişmiyor (DMU'lar arası "
-                                "farklı ama her DMU kendi içinde sabit kalıyor). Bu tür girdiler için "
-                                "'bunu artırırsam/azaltırsam ne olur' sorusuna dair hiçbir gerçek "
-                                "veri kanıtı yok -- bu yüzden Artır/Azalt seçeneği burada **devre "
-                                "dışı bırakıldı**. Detay için Panel Analizi sekmesindeki Mundlak "
-                                "testi kutusuna bakın."
-                            )
-                        cc1, cc2 = st.columns([1, 1])
-                        with cc1:
-                            yon_secim = st.radio(
-                                "Yön", ["Değiştirme", "Artır", "Azalt"], index=0,
-                                key=f"ml_yon_{g}", horizontal=True, disabled=zaman_sabit_mi,
-                            )
-                        with cc2:
-                            if yon_secim != "Değiştirme" and not zaman_sabit_mi:
-                                yuzde_deger = st.number_input(
-                                    "Yüzde (%)", min_value=0.0, max_value=100.0, value=10.0, step=1.0,
-                                    key=f"ml_yuzde_{g}",
-                                )
-                            else:
-                                yuzde_deger = 0.0
-                        if zaman_sabit_mi:
-                            girdi_yuzdeleri[g] = 0.0
-                        elif yon_secim == "Artır":
-                            girdi_yuzdeleri[g] = yuzde_deger / 100.0
-                        elif yon_secim == "Azalt":
-                            girdi_yuzdeleri[g] = -yuzde_deger / 100.0
-                        else:
-                            girdi_yuzdeleri[g] = 0.0
-
-                senaryo = senaryo_tahmin_et(mp, sonuc, girdi_cols, cikti_cols, girdi_yuzdeleri)
-
-                st.write("---")
-                st.markdown("#### 📈 Bu Kararın Etkisi")
-
-                if all(v == 0 for v in girdi_yuzdeleri.values()):
-                    st.info("Henüz bir girdi için Artır/Azalt seçmediniz -- yukarıdan seçim yapın.")
+                cc1, cc2 = st.columns([1, 1])
+                with cc1:
+                    yon_secim = st.radio(
+                        "Yön", ["Değiştirme", "Artır", "Azalt"], index=0,
+                        key=f"ml_yon_{g}", horizontal=True, disabled=zaman_sabit_mi,
+                    )
+                with cc2:
+                    if yon_secim != "Değiştirme" and not zaman_sabit_mi:
+                        yuzde_deger = st.number_input(
+                            "Yüzde (%)", min_value=0.0, max_value=100.0, value=10.0, step=1.0,
+                            key=f"ml_yuzde_{g}",
+                        )
+                    else:
+                        yuzde_deger = 0.0
+                if zaman_sabit_mi:
+                    girdi_yuzdeleri[g] = 0.0
+                elif yon_secim == "Artır":
+                    girdi_yuzdeleri[g] = yuzde_deger / 100.0
+                elif yon_secim == "Azalt":
+                    girdi_yuzdeleri[g] = -yuzde_deger / 100.0
                 else:
-                    st.caption(
-                        "**Nasıl hesaplanıyor:** Modelin öğrendiği ilişkiye göre, seçtiğiniz "
-                        "Artır/Azalt kararının verimliliği (MI) doğrudan ne kadar değiştirmesi "
-                        "beklendiğini gösteriyoruz. Girdi değişince korele çıktının nasıl tepki "
-                        "vereceği KESIN bilinmediği için (tek bir sabit sayı yerine), sonuç artık "
-                        "**bir aralık** olarak veriliyor -- kötümser/en olası/iyimser üç senaryo."
-                    )
+                    girdi_yuzdeleri[g] = 0.0
 
-                    etki_alt = senaryo["senaryo_etkisi_yuzde_alt"]
-                    etki_nokta = senaryo["senaryo_etkisi_yuzde_nokta"]
-                    etki_ust = senaryo["senaryo_etkisi_yuzde_ust"]
+        hesapla_tiklandi = st.button("Senaryoyu Hesapla (DEA + Malmquist)", type="primary", key="ml_dea_hesapla_btn")
 
-                    if senaryo["belirsizlik_genis_mi"]:
-                        st.error(
-                            f"⚠️⚠️ **Belirsizlik çok yüksek — yön bile net değil!** Kötümser "
-                            f"senaryoda %{etki_alt:+.1f}, iyimser senaryoda %{etki_ust:+.1f} çıkıyor "
-                            f"-- yani bu değişiklik verimliliği **artırabilir de azaltabilir de**. "
-                            f"Bu kararı, çıktının gerçek tepkisine dair daha güçlü bir kanıt "
-                            f"(örn. gerçek bir pilot uygulama) olmadan **almamanızı öneririz**."
-                        )
-                    elif etki_nokta is not None and etki_nokta > 0.5:
-                        st.success(f"## ✅ Bu kararın etkisi: %{etki_nokta:+.1f} (verimlilik artışı)")
-                    elif etki_nokta is not None and etki_nokta < -0.5:
-                        st.warning(f"## ⚠️ Bu kararın etkisi: %{etki_nokta:+.1f} (verimlilik azalışı)")
-                    else:
-                        st.info(f"## Bu kararın etkisi: %{etki_nokta:+.1f} (pratikte etkisi yok)")
+        if hesapla_tiklandi:
+            if all(v == 0 for v in girdi_yuzdeleri.values()):
+                st.info("Henüz bir girdi için Artır/Azalt seçmediniz -- yukarıdan seçim yapın.")
+            else:
+                with st.spinner("Yeni dönem verisi kuruluyor ve DEA + Malmquist çözülüyor..."):
+                    try:
+                        sonuc_dea = gelecek_donem_dea_senaryo(sonuc, girdi_cols, cikti_cols, girdi_yuzdeleri)
+                        st.session_state["ml_dea_sonuc"] = {"veri": sonuc_dea, "hata": None}
+                    except Exception as e:
+                        st.session_state["ml_dea_sonuc"] = {"hata": str(e)}
 
-                    st.caption(
-                        f"**Belirsizlik aralığı (%95):** Kötümser %{etki_alt:+.1f} — "
-                        f"En olası %{etki_nokta:+.1f} — İyimser %{etki_ust:+.1f}"
-                    )
-                    etki_yuzde = etki_nokta  # asagidaki eski kod bloklariyla uyumluluk icin
-
-                    with st.expander("Bir sonraki dönem için toplam sayısal tahmin (isteğe bağlı)"):
-                        st.caption(
-                            "Bu bölüm, yukarıdaki NET etkiyi, gerçek son dönem değerinize ekleyerek "
-                            "\"bir sonraki dönem tahmini ne olur\" sorusuna da bir sayı veriyor -- "
-                            "ama bu, yukarıdaki net etkiden FARKLI bir soru: burada ayrıca verinizdeki "
-                            "doğal eğilim (trend) de işin içine giriyor, bu yüzden daha fazla varsayım "
-                            "taşıyor."
-                        )
-                        tahmin_yuzde = senaryo["tahmini_degisim_yuzde"]
-                        st.write(f"**Gerçek son döneme göre toplam beklenen değişim:** %{tahmin_yuzde:+.1f}")
-                        c1, c2 = st.columns(2)
-                        c1.metric("Şu anki gerçek verimliliğiniz (MI)", senaryo["son_gercek_ortalama_MI"])
-                        c2.metric("Bir sonraki dönem toplam tahmini (MI)", senaryo["tahmini_gelecek_ortalama_MI"])
-
-                    with st.expander("Bu hesaplamanın detayına bakmak isterseniz"):
-                        st.caption(
-                            "Model, kararınızın etkisini hesaplarken önce 'hiçbir şey değişmeseydi "
-                            "model ne tahmin ederdi' diye bir referans noktası kullanıyor. Bu referans "
-                            "noktası ile 'kararınızla' tahmin arasındaki fark, yukarıdaki NET etkiyi verir."
-                        )
-                        cc1, cc2, cc3 = st.columns(3)
-                        cc1.metric("Model referans noktası (hiç değişiklik yapılmasaydı)", senaryo["taban_sifir_degisim_MI"])
-                        cc2.metric("Model tahmini (kararınızla)", senaryo["senaryo_ortalama_MI"])
-                        cc3.metric("Aradaki fark (kararınızın etkisi)", round(senaryo["senaryo_ortalama_MI"] - senaryo["taban_sifir_degisim_MI"], 4))
-
-                with st.expander("DMU (proje) bazında detay"):
-                    st.dataframe(senaryo["detay_df"], use_container_width=True)
-                    st.download_button(
-                        "Detayı Excel indir", excel_indirme_verisi(senaryo["detay_df"]),
-                        file_name=f"gelecek_tahmini_{ml['model_tipi']}.xlsx", mime=EXCEL_MIME, key="ml_senaryo_csv_dl",
-                    )
-
+        if "ml_dea_sonuc" in st.session_state:
+            paket = st.session_state["ml_dea_sonuc"]
+            if paket.get("hata"):
+                st.error(f"❌ Hesaplanamadı. Hata detayı (bunu paylaşırsanız hemen düzeltebilirim):\n\n`{paket['hata']}`")
+            else:
+                r = paket["veri"]
                 st.write("---")
-                with st.expander("🔍 Bu tahmine ne kadar güvenebilirim? (backtest sonuçları)"):
-                    st.caption(
-                        "Bu bölüm, modelin GEÇMİŞTE (henüz bilmediği dönemleri) ne kadar isabetli "
-                        "tahmin ettiğini gösterir -- yukarıdaki senaryo tahmininin güvenilirliği hakkında fikir verir."
+                st.markdown("#### 📈 Bu Senaryonun Etkisi")
+
+                degisim = r["degisim_yuzde"]
+                if degisim > 0.5:
+                    st.success(f"## ✅ Verimlilik değişimi: %{degisim:+.1f} (artış)")
+                elif degisim < -0.5:
+                    st.warning(f"## ⚠️ Verimlilik değişimi: %{degisim:+.1f} (azalış)")
+                else:
+                    st.info(f"## Verimlilik değişimi: %{degisim:+.1f} (pratikte değişim yok)")
+
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Etkinlik Değişimi (EC)", r["ortalama_EC"])
+                c2.metric("Sınır/Teknoloji Değişimi (TC)", r["ortalama_TC"])
+                c3.metric("Toplam Verimlilik (M = EC×TC)", r["ortalama_M"])
+                st.caption(
+                    "**EC:** senaryonuzdaki DMU'ların, o anki en iyi pratik sınırına göre "
+                    "etkinliği ne kadar değişti. **TC:** sınırın (frontier) kendisi ne kadar "
+                    "kaydı. **M:** ikisinin çarpımı, toplam verimlilik değişimi -- Malmquist "
+                    "Sonuçları sekmenizdeki M ile aynı anlama gelir."
+                )
+
+                with st.expander("DMU (proje) bazında detay (EC / TC / M)"):
+                    st.dataframe(r["detay_df"], use_container_width=True)
+                    st.download_button(
+                        "Detayı Excel indir", excel_indirme_verisi(r["detay_df"]),
+                        file_name="gelecek_donem_dea_senaryo.xlsx", mime=EXCEL_MIME, key="ml_dea_detay_dl",
                     )
-                    bt = ml["backtest"]
-                    if not bt["yeterli_veri"]:
-                        st.error(bt["mesaj"])
-                    else:
-                        m = bt["metrikler"]
-                        cc1, cc2, cc3, cc4 = st.columns(4)
-                        cc1.metric("Ortalama hata (MAE)", m["MAE"])
-                        cc2.metric("Büyük hata cezası (RMSE)", m["RMSE"])
-                        cc3.metric("Yüzdesel hata (MAPE)", f"%{m['MAPE_%']}")
-                        cc4.metric("Yön doğruluğu", f"%{m['yon_dogruluk_%']}")
-                        if m["modelin_naiften_iyi_mi"]:
-                            st.success(f"✅ Model, \"hiçbir şey değişmez\" varsayımından (naif tahmin) daha iyi tahmin ediyor.")
-                        else:
-                            st.warning(f"⚠️ Model, \"hiçbir şey değişmez\" varsayımından (naif tahmin) daha iyi değil -- tahmine temkinli yaklaşın.")
 
-                    rbt = ml["rolling"]
-                    if rbt["yeterli_veri"]:
-                        om = rbt["ortalama_metrikler"]
-                        st.caption(
-                            f"Birden fazla geçmiş dönemin ortalaması: MAE={om['MAE_ortalama']}, "
-                            f"yön doğruluğu=%{om['yon_dogruluk_ortalama_%']}, "
-                            f"naiften iyi olan dönem sayısı={om['kat_basina_naiften_iyi_sayisi']}/{rbt['kat_sayisi']}."
-                        )
-
-                    st.markdown("##### Değişkenlerin Etkisi (detay)")
-                    st.dataframe(mp["katsayilar"], use_container_width=True)
-                    st.markdown(ml_yorum_metni(mp, girdi_cols, cikti_cols))
-
+                with st.expander("Oluşturulan senaryo verisi (girdi + çıktı)"):
+                    st.caption(
+                        "Bu, DEA'ya verilen GERÇEK sayılar -- girdiler sizin seçtiğiniz yüzdeyle "
+                        "değişti, çıktılar geçmiş girdi-çıktı ilişkisine göre otomatik hesaplandı."
+                    )
+                    st.write("**Girdi (senaryo):**")
+                    st.dataframe(r["X_senaryo"], use_container_width=True)
+                    st.write("**Çıktı (senaryo, otomatik hesaplanan):**")
+                    st.dataframe(r["Y_senaryo"], use_container_width=True)
     with tab_aciklayici:
         st.markdown("### 📊 Açıklayıcılık Analizi — Hangi Değişken En İyi Açıklıyor?")
         st.markdown("""
@@ -1314,41 +1220,29 @@ if "sonuc" in st.session_state:
         }
         nihai_res_ac = tablo_map_ac[oneri_ac["sonuc_tablo"]]
 
-        # RESMI panel modeli artik SADECE (zaman icinde yeterince degisen) girdilerle
-        # calisiyor -- cikti disarida kalabiliyor, bu yuzden R² dusuk gorunebiliyor.
-        # Sirket ici sunumlarda "R² neden bu kadar dusuk" sorusunu netlestirmek icin,
-        # SADECE BU GRAFIK ICIN, ciktiyi da iceren AYRI, TESHIS AMACLI bir model
-        # kuruyoruz -- resmi panel regresyonunu (girdi-only kurali) HIC degistirmiyor,
-        # sadece "ciktiyi eklesek R²'ye ne kadar katkisi olurdu" sorusunu gorsellestiriyor.
-        # NOT: run_panel_analysis kullanildigi icin, zaman-sabit girdiler burada da
-        # (kullanicinin acik tercihiyle) otomatik olarak disarida kalir -- sadece
-        # cikti(lar) eklenir, zaman-sabit girdiler pasta grafiginde GORUNMEZ.
-        try:
-            panel_sonuc_genis = run_panel_analysis(sonuc["panel_df"], bagimli="MI", bagimsizlar=girdi_cols + cikti_cols)
-            oneri_genis = panel_sonuc_genis["oneri"]
-            tablo_map_genis = {
-                "pooled_robust": panel_sonuc_genis["pooled_robust"], "pooled_clustered": panel_sonuc_genis["pooled_clustered"],
-                "fe_robust": panel_sonuc_genis["fe_robust"], "fe_clustered": panel_sonuc_genis["fe_clustered"],
-                "re_robust": panel_sonuc_genis["re_robust"], "re_clustered": panel_sonuc_genis["re_clustered"],
-            }
-            nihai_res_genis = tablo_map_genis[oneri_genis["sonuc_tablo"]]
-            aciklama_sonuc = aciklayicilik_analizi(sonuc["panel_df"], nihai_res_genis, girdi_cols, cikti_cols)
-            st.info(
-                "ℹ️ Bu grafik, resmi panel modelinizden (sadece girdilerle çalışır) **farklı** "
-                "olarak, çıktı(lar)ı da geçici şekilde ekleyen ayrı bir modelle hesaplanmıştır -- "
-                "**amaç sadece 'çıktının R²'ye ne kadar katkısı olurdu' sorusunu görselleştirmek.** "
-                "Resmi panel regresyonunuz (Panel Analizi sekmesi, ⭐ NİHAİ SONUÇ) hâlâ sadece "
-                "girdilerle çalışır, bu grafik onu değiştirmez."
+        # BILINCLI KARAR: Aciklayicilik sekmesi SADECE resmi (girdi-yalnizca) modeli
+        # kullanir -- eskiden ciktiyi da ekleyen ayri bir "teshis" modeli vardi, ama
+        # bu, bastirma etkisi (suppression) yuzunden YANILTICI cikiyordu: bir girdinin
+        # "cikti ile birlikteyken" gorunen payi, o girdinin GERCEK (tek basina) acikla-
+        # ma gucunden cok daha buyuk cikabiliyordu -- ayni degisken icin IKI FARKLI
+        # sayi gostermek, tam da onlemeye calistigimiz kafa karisikligini yaratiyordu.
+        # Bu yuzden pasta grafigi HER ZAMAN resmi modelle birebir tutarlidir.
+        aciklama_sonuc = aciklayicilik_analizi(sonuc["panel_df"], nihai_res_ac, girdi_cols, cikti_cols)
+
+        if aciklama_sonuc.get("r_kare") is not None and aciklama_sonuc["r_kare"] < 0.20:
+            st.caption(
+                f"ℹ️ **Not:** Bu modelin R² değeri (~{aciklama_sonuc['r_kare']:.2f}) görece "
+                f"düşüktür. Bunun başlıca sebebi, modele dahil edilmeyen çıktı değişken(ler)inin "
+                f"MI'deki değişimin büyük bir kısmını taşımasıdır -- ancak çıktı(lar), girdilerle "
+                f"birlikte kullanıldığında bastırma etkisi (suppression) yaratabildiği için, "
+                f"kasıtlı olarak modelin dışında tutulmuştur."
             )
-        except Exception:
-            # Guvenlik agi: genisletilmis model kurulamazsa, resmi (sadece girdi) modele don
-            aciklama_sonuc = aciklayicilik_analizi(sonuc["panel_df"], nihai_res_ac, girdi_cols, cikti_cols)
 
         if not aciklama_sonuc["yeterli_veri"]:
             st.error(aciklama_sonuc["mesaj"])
         else:
             c1, c2 = st.columns(2)
-            c1.metric("Bu grafiğin R² değeri (çıktı dahil, teşhis amaçlı)", aciklama_sonuc["r_kare"])
+            c1.metric("Modelin R² değeri (Panel Analizi)", aciklama_sonuc["r_kare"])
             c2.metric("Payların toplamı (kontrol -- R²'ye yakın olmalı)", aciklama_sonuc["toplam_pratt"])
 
             tablo_ac = aciklama_sonuc["tablo"]
