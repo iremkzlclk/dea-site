@@ -535,6 +535,45 @@ def hausman_dejenerelik_giderici(panel_df: pd.DataFrame, bagimli: str, bagimsizl
     }
 
 
+def coklu_baglanti_rank_kontrolu(X: pd.DataFrame) -> dict:
+    """
+    Xc (sabit terim + bagimsizlar) sutunlarinin TAM RANKA sahip olup olmadigini
+    kontrol eder. Rank eksikse (mukemmel/near-mukemmel coklu dogrusal baglanti --
+    orn. secilen iki panel girdisi birbirinin neredeyse birebir kati), hangi
+    degisken CIFTLERININ sorumlu oldugunu (yuksek |korelasyon| ciftleri
+    uzerinden) tespit edip acik bir Turkce teshis uretir. Bu, linearmodels'in
+    ham Ingilizce "exog does not have full column rank" hatasindan ONCE
+    devreye girip run_panel_analysis icinde yakalanip actionable bir
+    ValueError'a cevrilir.
+
+    Returns: dict -- sorunlu_mu (bool), ve sorunlu ise: rank, beklenen_rank,
+             supheli_ciftler (liste of (degisken1, degisken2, |korelasyon|))
+    """
+    Xc = add_constant(X)
+    rank = np.linalg.matrix_rank(Xc.values)
+    tam_rank = Xc.shape[1]
+    if rank >= tam_rank:
+        return {"sorunlu_mu": False}
+
+    korelasyon = X.corr().abs()
+    kor_arr = korelasyon.to_numpy(copy=True)
+    np.fill_diagonal(kor_arr, 0.0)
+    kolonlar = list(korelasyon.columns)
+    supheli_ciftler = []
+    for i in range(len(kolonlar)):
+        for j in range(i + 1, len(kolonlar)):
+            r = kor_arr[i, j]
+            if pd.notna(r) and r > 0.995:
+                supheli_ciftler.append((kolonlar[i], kolonlar[j], round(float(r), 4)))
+
+    return {
+        "sorunlu_mu": True,
+        "rank": int(rank),
+        "beklenen_rank": int(tam_rank),
+        "supheli_ciftler": supheli_ciftler,
+    }
+
+
 def run_panel_analysis(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list, alpha: float = ALPHA):
     """
     panel_df: index=['entity','time'], sutunlarda bagimli + bagimsizlar bulunmali
@@ -584,6 +623,30 @@ def run_panel_analysis(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list, 
     y = panel_df[bagimli]
     X = panel_df[bagimsizlar]
     Xc = add_constant(X)
+
+    # Coklu dogrusal baglanti / rank eksikligi kontrolu -- linearmodels'in ham
+    # "exog does not have full column rank" hatasindan ONCE, sorumlu degisken
+    # ciftini gosteren acik bir Turkce teshis uretir.
+    rank_kontrol = coklu_baglanti_rank_kontrolu(X)
+    if rank_kontrol["sorunlu_mu"]:
+        if rank_kontrol["supheli_ciftler"]:
+            cift_metni = "; ".join(
+                f"{a} ile {b} (|r|={r})" for a, b, r in rank_kontrol["supheli_ciftler"]
+            )
+            detay = f"Suphelenilen coklu dogrusal baglanti: {cift_metni}."
+        else:
+            detay = (
+                "Belirgin bir ikili yuksek korelasyon bulunamadi -- sorun 3+ "
+                "degiskenin BIRLIKTE tam dogrusal bir kombinasyon olusturmasindan "
+                "kaynaklaniyor olabilir."
+            )
+        raise ValueError(
+            f"Secilen panel girdileri arasinda mukemmel/near-mukemmel coklu "
+            f"dogrusal baglanti var (rank={rank_kontrol['rank']}, "
+            f"beklenen={rank_kontrol['beklenen_rank']}) -- model tahmin "
+            f"edilemiyor. {detay} Bu degiskenlerden birini panel secim "
+            f"kutusundan cikarip tekrar deneyin."
+        )
 
     n_entities = panel_df.index.get_level_values("entity").nunique()
 
