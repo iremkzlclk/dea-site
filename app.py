@@ -313,21 +313,38 @@ with st.sidebar:
                     f"sayısını azaltmayı ya da (mümkünse) DMU sayısını artırmayı değerlendirin."
                 )
 
-            # Panel regresyonunda bagimsiz degisken secim kutusu KALDIRILDI --
-            # kullanicinin acik karariyla, panel analizi her zaman SADECE
-            # girdilerle calisir (ciktiyi bagimsiz degisken yapmak, girdi-
-            # cikti korelasyonuna bagli bastirma etkisiyle katsayilari
-            # bozabiliyordu). Bu artik bir secim degil, sabit bir kural.
-            bagimsizlar = veri_onizleme["girdi_cols"]
-            st.caption(
-                f"Panel regresyonu **sadece girdilerle** çalışır: "
-                f"{', '.join(veri_onizleme['girdi_cols'])}"
-            )
+            # YENI METODOLOJI: DEA girdi/ciktilari SADECE 1. asama (verimlilik
+            # hesabi) icin kullanilir. Panel regresyonunda kullanilacak
+            # aciklayici degiskenler, DEA'ya HIC girmeyen ("cevresel")
+            # sutunlardan kullanici tarafindan SECILIR -- ayrilabilirlik
+            # varsayimini (Simar & Wilson, 2007) korumak icin bu iki kume
+            # kesinlikle ortusmez (excel_okuma.py bunu "diger_cols" olarak
+            # otomatik ayirir, pipeline.py de ortusme varsa hata verir).
+            if not veri_onizleme["diger_cols"]:
+                st.error(
+                    "🚨 Excel'inizde Girdi_/Cikti_ disinda hicbir sutun yok. "
+                    "Panel regresyonu icin en az bir cevresel degisken sutunu "
+                    "eklemeniz gerekiyor (orn. Operator_Deneyimi, Vardiya vb.)."
+                )
+                bagimsizlar = []
+            else:
+                bagimsizlar = st.multiselect(
+                    "Panel regresyonunda kullanilacak degiskenler "
+                    "(DEA girdi/ciktilariniz burada listelenmez)",
+                    options=veri_onizleme["diger_cols"],
+                    default=veri_onizleme["diger_cols"],
+                )
+                st.caption(
+                    f"DEA girdileri: {', '.join(veri_onizleme['girdi_cols'])} | "
+                    f"DEA ciktilari: {', '.join(veri_onizleme['cikti_cols'])} "
+                    f"(bunlar sadece verimlilik hesabinda kullanilir, panel "
+                    f"regresyonuna dahil edilmez)."
+                )
 
-            if st.button("Analizi Calistir", type="primary"):
+            if st.button("Analizi Calistir", type="primary", disabled=not bagimsizlar):
                 with st.spinner("DEA -> Malmquist -> Panel analizi calistiriliyor..."):
                     uploaded.seek(0)
-                    sonuc = run_pipeline(uploaded, bagimsizlar=bagimsizlar)
+                    sonuc = run_pipeline(uploaded, panel_degiskenler=bagimsizlar)
 
                 st.session_state["sonuc"] = sonuc
                 # Onceki dosyaya ait alt-sekme sonuclarini temizle -- aksi halde farkli bir
@@ -510,7 +527,7 @@ if "sonuc" in st.session_state:
     with tab_panel:
         st.markdown("### 📐 Panel Veri Analizi Sonuçları")
         st.markdown(
-            "Bu bölüm, DMU'ların girdi/çıktı değerleri (örn. SİMÜLASYON_SÜRESİ, MALİYET) ile "
+            "Bu bölüm, kullanıcının seçtiği **çevresel (DEA dışı) değişkenler** ile "
             "Malmquist verimlilik endeksi (MI) arasındaki **istatistiksel ilişkiyi** inceler. Amaç: "
             "'hangi değişkenler verimliliği artırıyor/azaltıyor, ne yönde ve ne kadar güçlü' sorusuna "
             "cevap vermektir. Bunun için önce en uygun istatistiksel modeli (Pooled OLS / Sabit "
@@ -518,11 +535,11 @@ if "sonuc" in st.session_state:
             "kararlılığı gibi ek testlerle) sınar."
         )
         p = sonuc["panel_sonuc"]
-        # VIF, PANEL REGRESYONUNDA kullanilan (zaman-sabit filtrelenmis) degisken
-        # setinden BAGIMSIZ olarak, TUM orijinal girdilerle (zaman-sabit olanlar
-        # dahil) hesaplanir -- kullanici, cikarilan degiskenin de coklu baglanti
-        # teshisine dahil edilmesini istedi (regresyonun kendisi hala onsuz calisir).
-        teshis_vif = korelasyon_ve_vif_hesapla(sonuc["panel_df"], "MI", girdi_cols)
+        # bagimsizlar: panel regresyonunda GERCEKTEN kullanilan degisken listesi
+        # (nihai modelin kendi parametrelerinden dinamik olarak alinir --
+        # kullanicinin secim kutusundan girdigi liste ile birebir ayni olmali).
+        panel_bagimsizlar = [v for v in p["pooled"].params.index if v != "const"]
+        teshis_vif = korelasyon_ve_vif_hesapla(sonuc["panel_df"], "MI", panel_bagimsizlar)
         st.write("**VIF**")
         st.caption(
             "VIF (Variance Inflation Factor): bir degiskenin, MODELDEKI DIGER degiskenler tarafindan "
@@ -710,9 +727,10 @@ if "sonuc" in st.session_state:
         st.caption(
             f"Nihai (yukaridaki '⭐ NIHAI SONUC') modeldeki her degiskenin, ortalama degerinin %10 "
             f"degismesi durumunda MI uzerindeki tahmini etkisi. Anlamlilik esigi: p<{KATSAYI_ALPHA:.2f}. "
-            f"Yesil = pozitif (verimlilik artisi), kirmizi = negatif (verimlilik azalisi). Yon ayrica "
-            f"DEA'nin teorik beklentisiyle (Girdi -> negatif, Cikti -> pozitif) karsilastirilir; celisen "
-            f"anlamli katsayilar asagida ayrica isaretlenir."
+            f"Yesil = pozitif (verimlilik artisi), kirmizi = negatif (verimlilik azalisi). Bu degiskenler "
+            f"DEA girdi/ciktisi olmadigi (cevresel/harici oldugu) icin DEA teorisinden kaynaklanan bir "
+            f"yon beklentisi uygulanmaz; asagidaki tablo sadece katsayinin kendi isaretini ve "
+            f"anlamliligini gosterir."
         )
         analiz_df = panel_aksiyon_analizi(
             nihai_res, girdi_cols, cikti_cols, sonuc["panel_df"], alpha=KATSAYI_ALPHA,
@@ -741,8 +759,9 @@ if "sonuc" in st.session_state:
         )
         if st.button("Kararlilik Testini Calistir", key="kararlilik_btn"):
             with st.spinner("Panel modeli her DMU icin sirayla cikarilarak yeniden tahmin ediliyor..."):
+                panel_bagimsizlar = [v for v in p["pooled"].params.index if v != "const"]
                 st.session_state["kararlilik"] = leave_one_out_kararlilik(
-                    sonuc["panel_df"], "MI", girdi_cols + cikti_cols, oneri["sonuc_tablo"],
+                    sonuc["panel_df"], "MI", panel_bagimsizlar, oneri["sonuc_tablo"],
                 )
 
         if "kararlilik" in st.session_state:
