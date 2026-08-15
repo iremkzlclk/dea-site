@@ -693,3 +693,91 @@ def gelecek_donem_dea_senaryo(sonuc: dict, girdi_cols: list, cikti_cols: list,
         "degisim_yuzde": round((ort_M - 1.0) * 100, 2),
         "X_senaryo": X_senaryo, "Y_senaryo": Y_senaryo,
     }
+
+
+def panel_regresyon_senaryo(sonuc: dict, panel_girdi_yuzdeleri: dict) -> dict:
+    """
+    DEA'yi YENIDEN COZMEZ -- sadece panel regresyonunun (Pooled/FE/RE, hangisi
+    nihai olarak secildiyse) KATSAYILARINI kullanarak, kullanicinin panel
+    girdilerinde belirttigi yuzdesel degisikliklere gore GELECEK DONEM MI
+    tahmini uretir. Bu, gelecek_donem_dea_senaryo'dan (DEA'yi mekanik olarak
+    yeniden cozen fonksiyon) YONTEM OLARAK FARKLIDIR: burada sonuc SAF
+    ISTATISTIKSEL bir tahmindir (nokta tahmin + kaba belirsizlik araligi),
+    EC/TC ayristirmasi YOKTUR (bu ayristirma sadece DEA'nin kendi
+    optimizasyonundan gelir, regresyondan degil).
+
+    ONEMLI: modelin R^2'si dusukse (panel analizi sekmesinde gordugunuz gibi),
+    nokta tahmin etrafindaki belirsizlik ARALIGI genis olacaktir -- bu, modelin
+    hatasi degil, dusuk R^2'nin dogal/beklenen bir sonucudur.
+
+    panel_girdi_yuzdeleri: {degisken_adi: yuzdesel_degisim} (orn. {"Girdi_X": 0.10})
+                            Sadece nihai modelde GERCEKTEN kullanilan
+                            (zaman-sabitlik/dejenerelik nedeniyle elenmemis)
+                            degiskenler icin anlamlidir.
+
+    Returns: dict -- nihai_baslik, panel_bagimsizlar, r_kare, resid_std,
+             detay_df (index=DMU: Son_Gercek_MI, Tahmin_MI, Tahmin_Alt,
+             Tahmin_Ust, Degisim_Yuzde), ortalama_tahmin_MI, ortalama_son_MI,
+             ortalama_degisim_yuzde, X_senaryo
+    """
+    from backtest_module import _tahmin_et
+
+    p = sonuc["panel_sonuc"]
+    oneri = p["oneri"]
+    tablo_map = {
+        "pooled_robust": p["pooled_robust"], "pooled_clustered": p["pooled_clustered"],
+        "fe_robust": p["fe_robust"], "fe_clustered": p["fe_clustered"],
+        "re_robust": p["re_robust"], "re_clustered": p["re_clustered"],
+    }
+    nihai_res = tablo_map[oneri["sonuc_tablo"]]
+    panel_bagimsizlar = [v for v in nihai_res.params.index if v != "const"]
+
+    panel_df = sonuc["panel_df"]
+    son_zaman = panel_df.index.get_level_values("time").max()
+    son_df = panel_df.xs(son_zaman, level="time")  # index=entity
+    yeni_zaman = son_zaman + 1
+
+    satirlar = []
+    for entity in son_df.index:
+        satir = {"entity": entity, "time": yeni_zaman}
+        for col in panel_bagimsizlar:
+            taban = float(son_df.loc[entity, col])
+            yuzde = panel_girdi_yuzdeleri.get(col, 0.0)
+            satir[col] = taban * (1 + yuzde)
+        satirlar.append(satir)
+    X_senaryo = pd.DataFrame(satirlar).set_index(["entity", "time"])
+
+    tahmin_MI = _tahmin_et(nihai_res, X_senaryo)
+
+    try:
+        resid_std = float(nihai_res.resids.std())
+    except Exception:
+        resid_std = float("nan")
+
+    detay_satirlari = []
+    for entity in son_df.index:
+        tahmin = float(tahmin_MI.loc[(entity, yeni_zaman)])
+        gercek_son = float(son_df.loc[entity, "MI"])
+        alt = tahmin - 1.96 * resid_std if not np.isnan(resid_std) else None
+        ust = tahmin + 1.96 * resid_std if not np.isnan(resid_std) else None
+        detay_satirlari.append({
+            "DMU": entity,
+            "Son_Gercek_MI": round(gercek_son, 4),
+            "Tahmin_MI": round(tahmin, 4),
+            "Tahmin_Alt_%95": round(alt, 4) if alt is not None else None,
+            "Tahmin_Ust_%95": round(ust, 4) if ust is not None else None,
+            "Degisim_Yuzde": round((tahmin - gercek_son) / gercek_son * 100, 2) if gercek_son else None,
+        })
+    detay_df = pd.DataFrame(detay_satirlari).set_index("DMU")
+
+    return {
+        "nihai_baslik": oneri["sonuc_basligi"],
+        "panel_bagimsizlar": panel_bagimsizlar,
+        "r_kare": float(nihai_res.rsquared),
+        "resid_std": resid_std,
+        "detay_df": detay_df,
+        "ortalama_tahmin_MI": round(float(detay_df["Tahmin_MI"].mean()), 4),
+        "ortalama_son_MI": round(float(detay_df["Son_Gercek_MI"].mean()), 4),
+        "ortalama_degisim_yuzde": round(float(detay_df["Degisim_Yuzde"].mean()), 2),
+        "X_senaryo": X_senaryo,
+    }
