@@ -28,11 +28,6 @@ def excel_oku(dosya_yolu_veya_buffer, sheet_name=0):
 
     girdi_cols = [c for c in df.columns if c.startswith("Girdi_")]
     cikti_cols = [c for c in df.columns if c.startswith("Cikti_")]
-    # DEA girdi/ciktisi OLMAYAN (Donem/DMU disindaki) tum sutunlar --
-    # bunlar 2. asama panel regresyonunda secilebilecek "cevresel" adaylardir.
-    # Ayrilabilirlik (Simar & Wilson, 2007) geregi DEA girdi/ciktilariyla
-    # ORTUSMEMELERI icin ayri bir havuzda tutulurlar.
-    diger_cols = [c for c in df.columns if c not in (["Donem", "DMU"] + girdi_cols + cikti_cols)]
 
     if not girdi_cols:
         raise VeriDogrulamaHatasi("En az bir 'Girdi_...' sutunu olmali.")
@@ -40,7 +35,7 @@ def excel_oku(dosya_yolu_veya_buffer, sheet_name=0):
         raise VeriDogrulamaHatasi("En az bir 'Cikti_...' sutunu olmali.")
 
     # eksik hucre kontrolu
-    kontrol_cols = ["Donem", "DMU"] + girdi_cols + cikti_cols + diger_cols
+    kontrol_cols = ["Donem", "DMU"] + girdi_cols + cikti_cols
     bos = df[kontrol_cols].isna()
     if bos.any().any():
         satirlar = df[bos.any(axis=1)][["Donem", "DMU"]]
@@ -73,7 +68,6 @@ def excel_oku(dosya_yolu_veya_buffer, sheet_name=0):
         "df": df,
         "girdi_cols": girdi_cols,
         "cikti_cols": cikti_cols,
-        "diger_cols": diger_cols,
         "donem_sirali": donem_sirali,
         "dmu_sirali": dmu_sirali,
     }

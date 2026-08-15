@@ -285,66 +285,84 @@ with st.sidebar:
                 f"{len(veri_onizleme['girdi_cols'])} girdi, {len(veri_onizleme['cikti_cols'])} cikti."
             )
 
-            # --- Minimum DMU sayisi kontrolu (yukleme aninda erken uyari) ---
-            kontrol = min_dmu_kontrolu(
-                len(veri_onizleme["girdi_cols"]), len(veri_onizleme["cikti_cols"]),
-                len(veri_onizleme["dmu_sirali"]),
+            # --- ASAMA 1: DEA + Malmquist'te kullanilacak girdi/ciktilar ---
+            st.markdown("#### 1️⃣ DEA + Malmquist'te kullanilacak degiskenler")
+            dea_girdiler = st.multiselect(
+                "DEA girdileri (Girdi_...)",
+                options=veri_onizleme["girdi_cols"],
+                default=veri_onizleme["girdi_cols"],
+                key="dea_girdi_secim",
             )
-            if kontrol["seviye"] == "yeterli":
-                st.info(
-                    f"ℹ️ DMU sayınız ({kontrol['n_dmu']}), literatürdeki yaygın kural olan "
-                    f"n ≥ max(girdi×çıktı, 3×(girdi+çıktı)) = **{kontrol['onerilen_siki']}** eşiğini "
-                    f"karşılıyor ({kontrol['n_girdi']} girdi × {kontrol['n_cikti']} çıktı için)."
-                )
-            elif kontrol["seviye"] == "asgari":
-                st.warning(
-                    f"⚠️ DMU sayınız ({kontrol['n_dmu']}), literatürdeki daha sıkı kuralı "
-                    f"(n ≥ {kontrol['onerilen_siki']} = max(girdi×çıktı, 3×(girdi+çıktı))) karşılamıyor, "
-                    f"ancak daha gevşek asgari kuralın (n ≥ 2×(girdi+çıktı) = {kontrol['onerilen_gevsek']}) "
-                    f"üzerinde. Modelin ayrım gücü (discriminatory power) sınırlı olabilir — etkin DMU "
-                    f"sayısı orantısız yüksek çıkabilir."
-                )
-            else:
-                st.error(
-                    f"🚨 DMU sayınız ({kontrol['n_dmu']}), literatürdeki asgari kuralın bile "
-                    f"(n ≥ 2×(girdi+çıktı) = {kontrol['onerilen_gevsek']}) altında kalıyor "
-                    f"({kontrol['n_girdi']} girdi, {kontrol['n_cikti']} çıktı için). Bu durumda DEA'nın "
-                    f"ayrım gücü ciddi şekilde zayıflar; çoğu DMU yapay olarak 'etkin' çıkabilir. Girdi/çıktı "
-                    f"sayısını azaltmayı ya da (mümkünse) DMU sayısını artırmayı değerlendirin."
-                )
+            dea_ciktilar = st.multiselect(
+                "DEA ciktilari (Cikti_...)",
+                options=veri_onizleme["cikti_cols"],
+                default=veri_onizleme["cikti_cols"],
+                key="dea_cikti_secim",
+            )
 
-            # YENI METODOLOJI: DEA girdi/ciktilari SADECE 1. asama (verimlilik
-            # hesabi) icin kullanilir. Panel regresyonunda kullanilacak
-            # aciklayici degiskenler, DEA'ya HIC girmeyen ("cevresel")
-            # sutunlardan kullanici tarafindan SECILIR -- ayrilabilirlik
-            # varsayimini (Simar & Wilson, 2007) korumak icin bu iki kume
-            # kesinlikle ortusmez (excel_okuma.py bunu "diger_cols" olarak
-            # otomatik ayirir, pipeline.py de ortusme varsa hata verir).
-            if not veri_onizleme["diger_cols"]:
+            # --- Minimum DMU sayisi kontrolu -- SECILEN girdi/cikti sayisina gore ---
+            if dea_girdiler and dea_ciktilar:
+                kontrol = min_dmu_kontrolu(
+                    len(dea_girdiler), len(dea_ciktilar), len(veri_onizleme["dmu_sirali"]),
+                )
+                if kontrol["seviye"] == "yeterli":
+                    st.info(
+                        f"ℹ️ DMU sayınız ({kontrol['n_dmu']}), literatürdeki yaygın kural olan "
+                        f"n ≥ max(girdi×çıktı, 3×(girdi+çıktı)) = **{kontrol['onerilen_siki']}** eşiğini "
+                        f"karşılıyor ({kontrol['n_girdi']} girdi × {kontrol['n_cikti']} çıktı için)."
+                    )
+                elif kontrol["seviye"] == "asgari":
+                    st.warning(
+                        f"⚠️ DMU sayınız ({kontrol['n_dmu']}), literatürdeki daha sıkı kuralı "
+                        f"(n ≥ {kontrol['onerilen_siki']} = max(girdi×çıktı, 3×(girdi+çıktı))) karşılamıyor, "
+                        f"ancak daha gevşek asgari kuralın (n ≥ 2×(girdi+çıktı) = {kontrol['onerilen_gevsek']}) "
+                        f"üzerinde. Modelin ayrım gücü (discriminatory power) sınırlı olabilir — etkin DMU "
+                        f"sayısı orantısız yüksek çıkabilir."
+                    )
+                else:
+                    st.error(
+                        f"🚨 DMU sayınız ({kontrol['n_dmu']}), literatürdeki asgari kuralın bile "
+                        f"(n ≥ 2×(girdi+çıktı) = {kontrol['onerilen_gevsek']}) altında kalıyor "
+                        f"({kontrol['n_girdi']} girdi, {kontrol['n_cikti']} çıktı için). Bu durumda DEA'nın "
+                        f"ayrım gücü ciddi şekilde zayıflar; çoğu DMU yapay olarak 'etkin' çıkabilir. Girdi/çıktı "
+                        f"sayısını azaltmayı ya da (mümkünse) DMU sayısını artırmayı değerlendirin."
+                    )
+
+            # --- ASAMA 2: Panel analizinde kullanilacak girdiler ---
+            # Havuz SADECE 1. asamada SECILMEMIS Girdi_ sutunlarindan olusur --
+            # boylece ayni girdi hem DEA'da hem panelde asla kullanilamaz
+            # (ayrilabilirlik varsayimi -- Simar & Wilson, 2007 -- otomatik korunur).
+            st.markdown("#### 2️⃣ Panel analizinde kullanilacak girdiler")
+            panel_havuzu = [g for g in veri_onizleme["girdi_cols"] if g not in dea_girdiler]
+            if not panel_havuzu:
                 st.error(
-                    "🚨 Excel'inizde Girdi_/Cikti_ disinda hicbir sutun yok. "
-                    "Panel regresyonu icin en az bir cevresel degisken sutunu "
-                    "eklemeniz gerekiyor (orn. Operator_Deneyimi, Vardiya vb.)."
+                    "🚨 Tum Girdi_ sutunlari 1. asamada DEA icin secildi -- panel "
+                    "analizinde kullanilacak girdi kalmadi. Panel icin en az bir "
+                    "girdiyi 1. asamadan CIKARIP burada secilebilir hale getirin."
                 )
-                bagimsizlar = []
+                panel_girdiler = []
             else:
-                bagimsizlar = st.multiselect(
-                    "Panel regresyonunda kullanilacak degiskenler "
-                    "(DEA girdi/ciktilariniz burada listelenmez)",
-                    options=veri_onizleme["diger_cols"],
-                    default=veri_onizleme["diger_cols"],
-                )
                 st.caption(
-                    f"DEA girdileri: {', '.join(veri_onizleme['girdi_cols'])} | "
-                    f"DEA ciktilari: {', '.join(veri_onizleme['cikti_cols'])} "
-                    f"(bunlar sadece verimlilik hesabinda kullanilir, panel "
-                    f"regresyonuna dahil edilmez)."
+                    f"Sadece 1. asamada SECILMEYEN girdiler burada listelenir "
+                    f"(DEA'da kullanilanlar: {', '.join(dea_girdiler) if dea_girdiler else '—'})."
+                )
+                panel_girdiler = st.multiselect(
+                    "Panel regresyonu girdileri",
+                    options=panel_havuzu,
+                    default=panel_havuzu,
+                    key="panel_girdi_secim",
                 )
 
-            if st.button("Analizi Calistir", type="primary", disabled=not bagimsizlar):
+            calistirma_hazir = bool(dea_girdiler and dea_ciktilar and panel_girdiler)
+            if st.button("Analizi Calistir", type="primary", disabled=not calistirma_hazir):
                 with st.spinner("DEA -> Malmquist -> Panel analizi calistiriliyor..."):
                     uploaded.seek(0)
-                    sonuc = run_pipeline(uploaded, panel_degiskenler=bagimsizlar)
+                    sonuc = run_pipeline(
+                        uploaded,
+                        dea_girdiler=dea_girdiler,
+                        dea_ciktilar=dea_ciktilar,
+                        panel_girdiler=panel_girdiler,
+                    )
 
                 st.session_state["sonuc"] = sonuc
                 # Onceki dosyaya ait alt-sekme sonuclarini temizle -- aksi halde farkli bir
@@ -368,8 +386,12 @@ if "sonuc" not in st.session_state:
 
 if "sonuc" in st.session_state:
     sonuc = st.session_state["sonuc"]
-    girdi_cols = sonuc["veri"]["girdi_cols"]
-    cikti_cols = sonuc["veri"]["cikti_cols"]
+    # DIKKAT: bunlar Excel'deki TUM Girdi_/Cikti_ sutunlari degil, kullanicinin
+    # 1. asamada DEA icin SECTIGI alt kumedir -- asagidaki tum etiketleme/
+    # kararlilik/VIF islemleri SADECE gercekten DEA'da kullanilanlara gore yapilmali.
+    girdi_cols = sonuc["dea_girdiler"]
+    cikti_cols = sonuc["dea_ciktilar"]
+    panel_girdiler = sonuc["panel_girdiler"]
 
     tab_dea, tab_malmquist, tab_panel, tab_aciklayici, tab_backtest, tab_ml = st.tabs(
         ["DEA Sonuclari", "Malmquist Sonuclari", "Panel Analizi", "Açıklayıcılık",
