@@ -329,28 +329,38 @@ with st.sidebar:
                     )
 
             # --- ASAMA 2: Panel analizinde kullanilacak girdiler ---
-            # Havuz SADECE 1. asamada SECILMEMIS Girdi_ sutunlarindan olusur --
-            # boylece ayni girdi hem DEA'da hem panelde asla kullanilamaz
-            # (ayrilabilirlik varsayimi -- Simar & Wilson, 2007 -- otomatik korunur).
+            # Havuz artik TUM Girdi_ sutunlarini icerir (DEA'da kullanilanlar
+            # DAHIL) -- kullanici BILEREK ayni girdiyi hem DEA'da hem panelde
+            # kullanmayi secebilir. Varsayilan (on-secili) liste yine SADECE
+            # DEA'da kullanilmayanlardir -- ayrilabilirlik varsayimini
+            # (Simar & Wilson, 2007) korumak hala ONERILEN/varsayilan
+            # davranistir, sadece artik ZORUNLU degildir.
             st.markdown("#### 2️⃣ Panel analizinde kullanilacak girdiler")
-            panel_havuzu = [g for g in veri_onizleme["girdi_cols"] if g not in dea_girdiler]
-            if not panel_havuzu:
-                st.error(
-                    "🚨 Tum Girdi_ sutunlari 1. asamada DEA icin secildi -- panel "
-                    "analizinde kullanilacak girdi kalmadi. Panel icin en az bir "
-                    "girdiyi 1. asamadan CIKARIP burada secilebilir hale getirin."
-                )
-                panel_girdiler = []
-            else:
-                st.caption(
-                    f"Sadece 1. asamada SECILMEYEN girdiler burada listelenir "
-                    f"(DEA'da kullanilanlar: {', '.join(dea_girdiler) if dea_girdiler else '—'})."
-                )
-                panel_girdiler = st.multiselect(
-                    "Panel regresyonu girdileri",
-                    options=panel_havuzu,
-                    default=panel_havuzu,
-                    key="panel_girdi_secim",
+            panel_havuzu = veri_onizleme["girdi_cols"]
+            panel_varsayilan = [g for g in panel_havuzu if g not in dea_girdiler]
+            st.caption(
+                "Tüm Girdi_ sütunları listelenir. DEA'da kullanılanları da "
+                "seçebilirsiniz, ama bu, aynı değişkenin hem verimlilik "
+                "hesabında hem de o hesabı açıklamakta kullanılması anlamına "
+                "gelir (içsel devirsellik/totoloji riski) -- aşağıda böyle "
+                "bir seçim yaparsanız ayrıca uyarılırsınız."
+            )
+            panel_girdiler = st.multiselect(
+                "Panel regresyonu girdileri",
+                options=panel_havuzu,
+                default=panel_varsayilan,
+                key="panel_girdi_secim",
+            )
+            ayrilabilirlik_ihlali_secim = [g for g in panel_girdiler if g in dea_girdiler]
+            if ayrilabilirlik_ihlali_secim:
+                st.warning(
+                    f"⚠️ **Ayrılabilirlik uyarısı:** {', '.join(ayrilabilirlik_ihlali_secim)} "
+                    f"hem DEA'da hem panel regresyonunda kullanılıyor. Bu değişken(ler) "
+                    f"verimlilik skorunun (Malmquist) hesaplanmasına zaten girdiği için, "
+                    f"panel regresyonunda anlamlı çıkması kısmen **mekanik/beklenen bir "
+                    f"sonuç olabilir**, gerçek bir davranışsal ilişkiden bağımsız olarak. "
+                    f"Bilinçli bir metodolojik tercihse sorun değil, ama raporunuzda bu "
+                    f"riski açıkça belirtmeniz önerilir (Simar & Wilson, 2007)."
                 )
 
             calistirma_hazir = bool(dea_girdiler and dea_ciktilar and panel_girdiler)
@@ -557,6 +567,13 @@ if "sonuc" in st.session_state:
             "kararlılığı gibi ek testlerle) sınar."
         )
         p = sonuc["panel_sonuc"]
+        if sonuc.get("ayrilabilirlik_ihlali"):
+            st.warning(
+                f"⚠️ **Ayrılabilirlik uyarısı:** {', '.join(sonuc['ayrilabilirlik_ihlali'])} "
+                f"hem DEA hesabında hem bu panel regresyonunda kullanıldı -- aşağıdaki "
+                f"katsayılar kısmen mekanik/totolojik bir ilişkiyi yansıtıyor olabilir "
+                f"(bkz. Simar ve Wilson, 2007, ayrılabilirlik varsayımı)."
+            )
         # bagimsizlar: panel regresyonunda GERCEKTEN kullanilan degisken listesi
         # (nihai modelin kendi parametrelerinden dinamik olarak alinir --
         # kullanicinin secim kutusundan girdigi liste ile birebir ayni olmali).

@@ -53,12 +53,14 @@ def run_pipeline(dosya_yolu, dea_girdiler=None, dea_ciktilar=None, panel_girdile
     if gecersiz_dea_g or gecersiz_dea_c:
         raise ValueError(f"Excel'de olmayan DEA sutunu secildi: {gecersiz_dea_g | gecersiz_dea_c}")
 
-    cakisan = set(dea_girdiler) & set(panel_girdiler)
-    if cakisan:
-        raise ValueError(
-            f"AYRILABILIRLIK IHLALI: {cakisan} hem DEA'da hem panelde secilemez -- "
-            f"panel girdileri, DEA'da SECILMEMIS Girdi_ sutunlarindan olmalidir."
-        )
+    # NOT: Eskiden burada DEA girdileriyle panel girdilerinin ORTUSMESI
+    # KESIN OLARAK ENGELLENIYORDU (ayrilabilirlik varsayimi -- Simar &
+    # Wilson, 2007). Kullanici artik BILEREK ayni girdiyi hem DEA'da hem
+    # panelde kullanmak isteyebiliyor -- bu ARTIK HATA DEGIL, ama
+    # totoloji/icsel devirsellik riski tasidigi icin sonuc sozlugunde
+    # ayrica RAPORLANIR (app.py bunu kullaniciya acikca gosterir).
+    ayrilabilirlik_ihlali = sorted(set(dea_girdiler) & set(panel_girdiler))
+
     gecersiz_panel = set(panel_girdiler) - set(veri["girdi_cols"])
     if gecersiz_panel:
         raise ValueError(f"Panel icin Excel'de olmayan/Girdi_ olmayan sutun secildi: {gecersiz_panel}")
@@ -112,6 +114,7 @@ def run_pipeline(dosya_yolu, dea_girdiler=None, dea_ciktilar=None, panel_girdile
         "X": X, "Y": Y,
         "dea_girdiler": dea_girdiler, "dea_ciktilar": dea_ciktilar,
         "panel_girdiler": panel_girdiler,
+        "ayrilabilirlik_ihlali": ayrilabilirlik_ihlali,
         "dea": dea_sonuclari,
         "malmquist": malmquist_df,
         "panel_df": panel_df,
