@@ -562,6 +562,23 @@ if "sonuc" in st.session_state:
         # kullanicinin secim kutusundan girdigi liste ile birebir ayni olmali).
         panel_bagimsizlar = [v for v in p["pooled"].params.index if v != "const"]
         teshis_vif = korelasyon_ve_vif_hesapla(sonuc["panel_df"], "MI", panel_bagimsizlar)
+
+        st.write("**Korelasyon Matrisi**")
+        st.caption(
+            "Degiskenler arasindaki ikili (pairwise) dogrusal iliski. 1.0'a "
+            "yakin (pozitif ya da negatif) degerler, iki degiskenin neredeyse "
+            "AYNI bilgiyi tasidigini gosterir -- VIF tablosundaki yuksek "
+            "degerlerin HANGI degisken CIFTINDEN kaynaklandigini burada "
+            "gorebilirsiniz. |r| ≥ 0.8 genellikle dikkat esigi kabul edilir."
+        )
+        korelasyon_goster = teshis_vif["corr"].round(3)
+        st.dataframe(
+            korelasyon_goster.style.background_gradient(
+                cmap="RdBu_r", vmin=-1, vmax=1, axis=None
+            ),
+            use_container_width=True,
+        )
+
         st.write("**VIF**")
         st.caption(
             "VIF (Variance Inflation Factor): bir degiskenin, MODELDEKI DIGER degiskenler tarafindan "
