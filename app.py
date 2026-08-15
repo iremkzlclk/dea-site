@@ -572,12 +572,23 @@ if "sonuc" in st.session_state:
             "gorebilirsiniz. |r| ≥ 0.8 genellikle dikkat esigi kabul edilir."
         )
         korelasyon_goster = teshis_vif["corr"].round(3)
-        st.dataframe(
-            korelasyon_goster.style.background_gradient(
-                cmap="RdBu_r", vmin=-1, vmax=1, axis=None
-            ),
-            use_container_width=True,
-        )
+
+        def _kor_renk(v):
+            if pd.isna(v):
+                return ""
+            # matplotlib GEREKTIRMEYEN, elle kirmizi(-1)/beyaz(0)/mavi(+1) gradyani
+            v = max(-1.0, min(1.0, float(v)))
+            if v >= 0:
+                r, g, b = int(255 - 155 * v), int(255 - 155 * v), 255
+            else:
+                r, g, b = 255, int(255 + 155 * v), int(255 + 155 * v)
+            return f"background-color: rgb({r},{g},{b})"
+
+        try:
+            styler = korelasyon_goster.style.map(_kor_renk)   # pandas >= 2.1
+        except AttributeError:
+            styler = korelasyon_goster.style.applymap(_kor_renk)  # pandas < 2.1 (eski surumler)
+        st.dataframe(styler, use_container_width=True)
 
         st.write("**VIF**")
         st.caption(
