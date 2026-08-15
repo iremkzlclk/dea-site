@@ -1162,7 +1162,7 @@ if "sonuc" in st.session_state:
 
         # Zaman-sabit girdilerde Artir/Azalt'i yapisal olarak devre disi birak (ML Tahmin
         # sekmesindeki ayni guvenlik onlemi -- degisken_varyans_analizi kullanarak).
-        varyans_analizi_ml = degisken_varyans_analizi(sonuc["panel_df"], girdi_cols)
+        varyans_analizi_ml = degisken_varyans_analizi(sonuc["dea_girdi_panel_df"], girdi_cols)
         zaman_sabit_girdiler_ml = set(
             varyans_analizi_ml[varyans_analizi_ml["within_orani"] < 0.01].index
         )

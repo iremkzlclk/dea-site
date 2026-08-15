@@ -91,7 +91,20 @@ def run_pipeline(dosya_yolu, dea_girdiler=None, dea_ciktilar=None, panel_girdile
 
     panel_df = pd.DataFrame(panel_rows).set_index(["entity", "time"]).sort_index()
 
-    # 5) Panel analizi -- kullanicinin sectigi (DEA-disi) girdilerle
+    # 6) DEA girdilerinin TUM donemler icin uzun-format (entity, time) hali --
+    #    panel_df ARTIK bu girdileri icermedigi (sadece panel_girdiler var)
+    #    icin, "ML Tahmin" sekmesindeki zaman-sabitlik teshisi gibi DEA
+    #    girdilerine ozgu diagnostikler icin AYRICA saglanir.
+    dea_girdi_panel_rows = []
+    for i, d in enumerate(donemler, start=1):
+        for dmu in veri["dmu_sirali"]:
+            satir = {"entity": dmu, "time": i}
+            for col in dea_girdiler:
+                satir[col] = X[d].loc[dmu, col]
+            dea_girdi_panel_rows.append(satir)
+    dea_girdi_panel_df = pd.DataFrame(dea_girdi_panel_rows).set_index(["entity", "time"]).sort_index()
+
+    # 7) Panel analizi -- kullanicinin sectigi (DEA-disi) girdilerle
     panel_sonuc = run_panel_analysis(panel_df, bagimli="MI", bagimsizlar=panel_girdiler)
 
     return {
@@ -102,6 +115,7 @@ def run_pipeline(dosya_yolu, dea_girdiler=None, dea_ciktilar=None, panel_girdile
         "dea": dea_sonuclari,
         "malmquist": malmquist_df,
         "panel_df": panel_df,
+        "dea_girdi_panel_df": dea_girdi_panel_df,
         "panel_sonuc": panel_sonuc,
     }
 
