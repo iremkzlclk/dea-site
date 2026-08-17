@@ -447,70 +447,103 @@ def korelasyon_ve_vif_hesapla(panel_df: pd.DataFrame, bagimli: str, teshis_degis
     return {"corr": corr, "vif": vif_data}
 
 
+def _panel_test_seti_gecerli_mi(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list):
+    """
+    Verilen bagimsizlar seti icin FE, RE, Hausman, Poolability (F-testi) VE
+    BP-LM testlerinin HEPSININ hesaplanabilir ve GECERLI (dejenere olmayan)
+    olup olmadigini kontrol eder. Herhangi biri EXCEPTION firlatirsa ya da
+    Hausman istatistigi dejenere (negatif/≈0) cikarsa GECERSIZ sayilir --
+    zaman-sabit/neredeyse-sabit bir girdi genelde bu testlerden EN AZ BIRINI
+    (cogunlukla Hausman'i, ama bazen Poolability F-testini ya da BP-LM'yi de)
+    sayisal olarak imkansiz hale getirir.
+
+    Returns: (gecerli_mi: bool, h_stat: float veya None)
+    """
+    try:
+        y = panel_df[bagimli]
+        X = panel_df[bagimsizlar]
+        Xc = add_constant(X)
+        res_fe = PanelOLS(y, X, entity_effects=True, drop_absorbed=True).fit()
+        res_re = RandomEffects(y, Xc).fit()
+        h_stat, h_dof, h_pval = hausman_test(res_fe, res_re)
+        if h_stat < 0 or abs(h_stat) < 1e-6:
+            return False, None
+
+        res_pooled = PooledOLS(y, Xc).fit()
+        _ = res_fe.f_pooled            # Poolability F-testi hesaplanabiliyor mu
+        _ = breusch_pagan_lm_test(res_pooled, panel_df)  # BP-LM hesaplanabiliyor mu
+        return True, h_stat
+    except Exception:
+        return False, None
+
+
 def hausman_dejenerelik_giderici(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list) -> dict:
     """
-    Zaman-sabit filtrelemesi YAPILDIKTAN SONRA bile, klasik Hausman testi
-    hala negatif ya da dejenere (chi2≈0) cikabilir -- bunun sebebi zaman-
-    sabitlik olmayabilir (orn. iki zaman-icinde-degisen degiskenin birbirine
-    cok yakin hareket etmesi de ayni sorunu yaratabilir). Bu fonksiyon,
-    BU DURUMU AYRICA cozer: Hausman dejenere cikiyorsa, bagimsizlar
-    listesindeki degiskenleri TEKER TEKER cikarip Hausman'i her seferinde
-    yeniden hesaplar, ve HANGI DEGISKENIN cikarilmasi sorunu en iyi
-    cozuyorsa (en yuksek, gecerli/pozitif chi2'yi verıyorsa) o degiskeni
-    KALICI olarak modelden cikarir. Bu islem, hala dejenere sonuc alindigi
-    surece TEKRARLANIR (birden fazla sorunlu degisken olabilir).
+    Zaman-sabit filtrelemesi YAPILDIKTAN SONRA bile, Hausman testi (ya da
+    Poolability F-testi, ya da BP-LM testi) hala negatif/dejenere/hesaplanamaz
+    cikabilir -- bunun sebebi zaman-sabitlik olmayabilir (orn. iki zaman-
+    icinde-degisen degiskenin birbirine cok yakin hareket etmesi de ayni
+    sorunu yaratabilir). Bu fonksiyon, BU DURUMU AYRICA cozer: bagimsizlar
+    listesindeki degiskenleri TEKER TEKER cikarip TUM testleri (Hausman +
+    Poolability + BP-LM) her seferinde yeniden hesaplar, ve HANGI DEGISKENIN
+    cikarilmasi TUM testleri gecerli hale getiriyorsa (aday gecerliler
+    arasinda en yuksek Hausman chi2'sini verıyorsa) o degiskeni KALICI
+    olarak modelden cikarir. Bu islem, hala sorun devam ettigi surece
+    TEKRARLANIR (birden fazla sorunlu degisken olabilir).
 
     Returns: dict -- bagimsizlar (indirgenmis liste), cikarilan_degiskenler
-             (bu adimda -- zaman-sabitlikten degil, dejenerelik yuzunden --
-             cikarilan degiskenler), son_hausman (stat, dof, pval)
+             (bu adimda -- zaman-sabitlikten degil, test-dejenereligi
+             yuzunden -- cikarilan degiskenler), son_hausman (stat, dof, pval)
     """
     cikarilan_degiskenler = []
     guvenlik_sayaci = 0
 
     while len(bagimsizlar) > 1 and guvenlik_sayaci < 10:
         guvenlik_sayaci += 1
-        y = panel_df[bagimli]
-        X = panel_df[bagimsizlar]
-        Xc = add_constant(X)
-        try:
+        gecerli_mi, _ = _panel_test_seti_gecerli_mi(panel_df, bagimli, bagimsizlar)
+        if gecerli_mi:
+            y = panel_df[bagimli]
+            X = panel_df[bagimsizlar]
+            Xc = add_constant(X)
             res_fe = PanelOLS(y, X, entity_effects=True, drop_absorbed=True).fit()
             res_re = RandomEffects(y, Xc).fit()
             h_stat, h_dof, h_pval = hausman_test(res_fe, res_re)
-        except Exception:
-            break
-
-        dejenere_mi = h_stat < 0 or abs(h_stat) < 1e-6
-        if not dejenere_mi:
             return {
                 "bagimsizlar": bagimsizlar, "cikarilan_degiskenler": cikarilan_degiskenler,
                 "son_hausman": {"stat": h_stat, "dof": h_dof, "pval": h_pval},
             }
 
-        # Dejenere -- her degiskeni sirayla cikarip hangisinin en iyi
-        # duzelttigini (en yuksek gecerli chi2'yi verdigini) bul.
+        y = panel_df[bagimli]
+
+        dejenere_mi = True  # gecerli_mi False ise buraya geldik
+
+        # Dejenere -- her degiskeni sirayla cikarip hangisinin TUM testleri
+        # (Hausman + Poolability + BP-LM) gecerli hale getirdigini bul.
         en_iyi_aday, en_iyi_stat = None, None
         for aday in bagimsizlar:
             deneme_liste = [v for v in bagimsizlar if v != aday]
             if not deneme_liste:
                 continue
-            try:
-                X_d = panel_df[deneme_liste]
-                Xc_d = add_constant(X_d)
-                res_fe_d = PanelOLS(y, X_d, entity_effects=True, drop_absorbed=True).fit()
-                res_re_d = RandomEffects(y, Xc_d).fit()
-                stat_d, _, _ = hausman_test(res_fe_d, res_re_d)
-            except Exception:
-                continue
-            if stat_d >= 0 and abs(stat_d) > 1e-6:
+            gecerli_aday_mi, stat_d = _panel_test_seti_gecerli_mi(panel_df, bagimli, deneme_liste)
+            if gecerli_aday_mi:
                 if en_iyi_stat is None or stat_d > en_iyi_stat:
                     en_iyi_aday, en_iyi_stat = aday, stat_d
 
         if en_iyi_aday is None:
             # Hicbir tek-degisken cikarma sorunu cozmuyor -- daha fazla
             # ugrasmadan, mevcut (dejenere) sonucla dur.
+            try:
+                X = panel_df[bagimsizlar]
+                Xc = add_constant(X)
+                res_fe = PanelOLS(y, X, entity_effects=True, drop_absorbed=True).fit()
+                res_re = RandomEffects(y, Xc).fit()
+                h_stat, h_dof, h_pval = hausman_test(res_fe, res_re)
+                son_hausman = {"stat": h_stat, "dof": h_dof, "pval": h_pval}
+            except Exception as e:
+                son_hausman = {"hata": str(e)}
             return {
                 "bagimsizlar": bagimsizlar, "cikarilan_degiskenler": cikarilan_degiskenler,
-                "son_hausman": {"stat": h_stat, "dof": h_dof, "pval": h_pval},
+                "son_hausman": son_hausman,
             }
 
         cikarilan_degiskenler.append(en_iyi_aday)
