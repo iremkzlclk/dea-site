@@ -639,6 +639,36 @@ def run_panel_analysis(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list, 
             "icin hicbir kullanilabilir degisken kalmadi."
         )
 
+    # Coklu dogrusal baglanti / rank eksikligi kontrolu -- BU KONTROL,
+    # hausman_dejenerelik_giderici'DEN ONCE calismalidir. Aksi halde,
+    # dejenerelik_giderici kendi ic testlerinde (PanelOLS/RandomEffects.fit())
+    # ayni rank hatasiyla karsilasip bunu SESSIZCE "gecersiz, bir degisken
+    # cikar" olarak yorumlar ve HANGI CIFTIN sorumlu oldugunu gosteren bu
+    # ACIK teshis mesaji hic gorunmeden, rastgele bir degiskeni sessizce
+    # atar. Once burada net bir hata verilir; boylece kullanici SORUNU
+    # (hangi degisken ciftinin) BILEREK cozer, sessizce bir degisken
+    # kaybetmez.
+    rank_kontrol_erken = coklu_baglanti_rank_kontrolu(panel_df[bagimsizlar])
+    if rank_kontrol_erken["sorunlu_mu"]:
+        if rank_kontrol_erken["supheli_ciftler"]:
+            cift_metni = "; ".join(
+                f"{a} ile {b} (|r|={r})" for a, b, r in rank_kontrol_erken["supheli_ciftler"]
+            )
+            detay = f"Suphelenilen coklu dogrusal baglanti: {cift_metni}."
+        else:
+            detay = (
+                "Belirgin bir ikili yuksek korelasyon bulunamadi -- sorun 3+ "
+                "degiskenin BIRLIKTE tam dogrusal bir kombinasyon olusturmasindan "
+                "kaynaklaniyor olabilir."
+            )
+        raise ValueError(
+            f"Secilen panel girdileri arasinda mukemmel/near-mukemmel coklu "
+            f"dogrusal baglanti var (rank={rank_kontrol_erken['rank']}, "
+            f"beklenen={rank_kontrol_erken['beklenen_rank']}) -- model tahmin "
+            f"edilemiyor. {detay} Bu degiskenlerden birini panel secim "
+            f"kutusundan cikarip tekrar deneyin."
+        )
+
     # Zaman-sabitlik filtrelemesinden SONRA, hala dejenere (negatif/≈0) bir
     # Hausman sonucu cikiyorsa (orn. iki zaman-icinde-degisen degiskenin
     # birbirine cok yakin hareket etmesinden kaynaklanan bir sorun), suclu
@@ -656,30 +686,6 @@ def run_panel_analysis(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list, 
     y = panel_df[bagimli]
     X = panel_df[bagimsizlar]
     Xc = add_constant(X)
-
-    # Coklu dogrusal baglanti / rank eksikligi kontrolu -- linearmodels'in ham
-    # "exog does not have full column rank" hatasindan ONCE, sorumlu degisken
-    # ciftini gosteren acik bir Turkce teshis uretir.
-    rank_kontrol = coklu_baglanti_rank_kontrolu(X)
-    if rank_kontrol["sorunlu_mu"]:
-        if rank_kontrol["supheli_ciftler"]:
-            cift_metni = "; ".join(
-                f"{a} ile {b} (|r|={r})" for a, b, r in rank_kontrol["supheli_ciftler"]
-            )
-            detay = f"Suphelenilen coklu dogrusal baglanti: {cift_metni}."
-        else:
-            detay = (
-                "Belirgin bir ikili yuksek korelasyon bulunamadi -- sorun 3+ "
-                "degiskenin BIRLIKTE tam dogrusal bir kombinasyon olusturmasindan "
-                "kaynaklaniyor olabilir."
-            )
-        raise ValueError(
-            f"Secilen panel girdileri arasinda mukemmel/near-mukemmel coklu "
-            f"dogrusal baglanti var (rank={rank_kontrol['rank']}, "
-            f"beklenen={rank_kontrol['beklenen_rank']}) -- model tahmin "
-            f"edilemiyor. {detay} Bu degiskenlerden birini panel secim "
-            f"kutusundan cikarip tekrar deneyin."
-        )
 
     n_entities = panel_df.index.get_level_values("entity").nunique()
 
