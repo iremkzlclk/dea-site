@@ -11,7 +11,7 @@ import streamlit.components.v1 as components
 import io
 from excel_okuma import excel_oku, donemlere_ayir, VeriDogrulamaHatasi
 from dea_module import min_dmu_kontrolu
-from panel_module import leave_one_out_kararlilik, aciklayicilik_analizi, degisken_varyans_analizi, run_panel_analysis, korelasyon_ve_vif_hesapla
+from panel_module import leave_one_out_kararlilik, aciklayicilik_analizi, degisken_varyans_analizi, run_panel_analysis, korelasyon_ve_vif_hesapla, within_korelasyon_hesapla, ridge_izi_hesapla
 from pipeline import run_pipeline
 from backtest_module import backtest_calistir, rolling_backtest_calistir
 from ml_module import gelecek_donem_dea_senaryo, panel_regresyon_senaryo
@@ -606,6 +606,72 @@ if "sonuc" in st.session_state:
         except AttributeError:
             styler = korelasyon_goster.style.applymap(_kor_renk)  # pandas < 2.1 (eski surumler)
         st.dataframe(styler, use_container_width=True)
+
+        with st.expander("🔬 Within (FE-özgü) Korelasyon Matrisi — ham tablodan farkı"):
+            st.caption(
+                "Yukarıdaki HAM tablo, DMU'lar arası seviye farklarını (between) VE her "
+                "DMU'nun kendi zaman içi değişimini (within) birlikte gösterir. Ama FE "
+                "(Sabit Etkiler) modeli SADECE within varyasyonu kullanır -- her "
+                "değişkenden kendi DMU-ortalaması çıkarıldıktan SONRAKI hali. Eğer "
+                "aşağıdaki korelasyonlar yukarıdakinden belirgin şekilde düşükse, FE "
+                "modeliniz -- ham tabloya bakarak düşünülenden -- değişkenleri DAHA İYİ "
+                "ayırt ediyor olabilir. Bu SADECE bir teşhis tablosudur, hiçbir modelleme "
+                "kararını otomatik değiştirmez."
+            )
+            within_sonuc = within_korelasyon_hesapla(sonuc["panel_df"], "MI", panel_bagimsizlar)
+            within_goster = within_sonuc["corr_within"].round(3)
+            try:
+                within_styler = within_goster.style.map(_kor_renk)
+            except AttributeError:
+                within_styler = within_goster.style.applymap(_kor_renk)
+            st.dataframe(within_styler, use_container_width=True)
+
+            if within_sonuc["ortalama_dusus"] is not None:
+                d = within_sonuc["ortalama_dusus"]
+                if d > 0.15:
+                    st.success(
+                        f"✅ Within korelasyonlar, ham korelasyonlardan ortalama **{d:.3f}** "
+                        f"daha düşük -- FE modeliniz, ham tablonun düşündürdüğünden **daha iyi** "
+                        f"ayırt ediyor görünüyor."
+                    )
+                elif d < -0.05:
+                    st.warning(
+                        f"⚠️ Within korelasyonlar aslında ham korelasyonlardan **daha yüksek** "
+                        f"(fark: {d:.3f}) -- sorun DMU'lar arası seviye farkından değil, "
+                        f"doğrudan bu değişkenlerin ZAMAN İÇİNDE BİRLİKTE hareket etmesinden "
+                        f"kaynaklanıyor. Bu durumda FE modeli de sorunu çözemez."
+                    )
+                else:
+                    st.info(
+                        f"ℹ️ Within ve ham korelasyonlar birbirine yakın (fark: {d:.3f}) -- "
+                        f"çoklu doğrusal bağlantı sorunu, FE'ye geçmekle kendiliğinden "
+                        f"çözülmüyor."
+                    )
+
+        with st.expander("📉 Ridge İzi (Ridge Trace) — hangi katsayılar kırılgan?"):
+            st.caption(
+                "Ceza parametresi (alpha) kademeli olarak artırılırken her değişkenin "
+                "(standardize edilmiş, within/FE-özgü) katsayısının nasıl değiştiğini "
+                "gösterir (Hoerl & Kennard, 1970). **Gerçek bir etki, ceza artarken "
+                "YUMUŞAKÇA sıfıra yaklaşır, işaret değiştirmez.** Bir çizgi işaret "
+                "değiştiriyor ya da çılgınca sıçrıyorsa, o değişkenin OLS/FE'deki "
+                "katsayısı büyük ölçüde çoklu doğrusal bağlantıdan kaynaklanan bir "
+                "yapaylıktır -- gerçek, kararlı bir etki değildir."
+            )
+            ridge_sonuc = ridge_izi_hesapla(sonuc["panel_df"], "MI", panel_bagimsizlar)
+            st.line_chart(ridge_sonuc["iz_df"], use_container_width=True)
+            st.caption(
+                "X ekseni: log10(alpha) -- soldan sağa ceza artıyor. Y ekseni: "
+                "standardize edilmiş (within) katsayı değeri. En soldaki (alpha≈0.001) "
+                "değerler, cezasız OLS referans katsayılarına eşdeğerdir."
+            )
+            with st.expander("Cezasız (OLS) referans katsayılar -- ölçek karşılaştırması"):
+                st.dataframe(
+                    pd.DataFrame.from_dict(
+                        ridge_sonuc["ols_katsayilar"], orient="index", columns=["Standardize Katsayı"]
+                    ).round(4),
+                    use_container_width=True,
+                )
 
         st.write("**VIF**")
         st.caption(

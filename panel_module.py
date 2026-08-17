@@ -447,6 +447,103 @@ def korelasyon_ve_vif_hesapla(panel_df: pd.DataFrame, bagimli: str, teshis_degis
     return {"corr": corr, "vif": vif_data}
 
 
+def within_korelasyon_hesapla(panel_df: pd.DataFrame, bagimli: str, teshis_degiskenler: list) -> dict:
+    """
+    HAM (seviye) korelasyon, DMU'lar arasi seviye farklarini (between) VE her
+    DMU'nun kendi zaman ici degisimini (within) KARISTIRIR. Ama FE (Sabit
+    Etkiler) modeli SADECE within varyasyonu kullanir -- her degiskenden
+    kendi DMU-ortalamasi CIKARILDIKTAN SONRAKI (demeaned) veriyle calisir.
+
+    Bu fonksiyon, AYNI degisken setinin within-donusturulmus (DMU-ortalamasi
+    cikarilmis) halindeki korelasyonunu hesaplar. Eger bu korelasyonlar HAM
+    korelasyondan BELIRGIN SEKILDE dusukse, bu, degiskenlerin DMU'lar arasi
+    seviye farklarinda (orn. "hangi DMU daha gelismis") birbirine cok bagli
+    olsa da, zaman icindeki DEGISIMLERININ (FE'nin gercekte kullandigi bilgi)
+    birbirinden daha BAGIMSIZ oldugu anlamina gelir -- yani FE modeli, ham
+    tabloya bakarak dusunulenden DAHA IYI ayirt ediyor olabilir.
+
+    NOT: Bu SADECE bir TESHIS/rapor tablosudur -- hicbir modelleme kararini
+    (hangi degiskenlerin secildigini, hangi tahmincinin kullanildigini)
+    OTOMATIK OLARAK degistirmez.
+
+    Returns: dict -- corr_within (DataFrame), corr_ham (DataFrame, kiyaslama
+             icin), ortalama_dusus (ham - within korelasyonlarinin, mutlak
+             degerce, ortalama farki -- pozitifse within DAHA DUSUK demektir)
+    """
+    gecerli = [d for d in teshis_degiskenler if d in panel_df.columns]
+    kolonlar = gecerli + [bagimli]
+
+    corr_ham = panel_df[kolonlar].corr()
+
+    # Within donusum: her DMU (entity) icin kendi ortalamasini cikar
+    df_within = panel_df[kolonlar].groupby(level="entity").transform(lambda s: s - s.mean())
+    corr_within = df_within.corr()
+
+    # Sadece bagimsizlar arasindaki (bagimli haric) ikili karsilastirmalarin
+    # ortalama mutlak farkini hesapla -- "within genel olarak dusuk mu" sorusu icin
+    farklar = []
+    for i in range(len(gecerli)):
+        for j in range(i + 1, len(gecerli)):
+            ham_r = abs(corr_ham.iloc[i, j])
+            within_r = abs(corr_within.iloc[i, j])
+            if pd.notna(ham_r) and pd.notna(within_r):
+                farklar.append(ham_r - within_r)
+    ortalama_dusus = float(np.mean(farklar)) if farklar else None
+
+    return {"corr_within": corr_within, "corr_ham": corr_ham, "ortalama_dusus": ortalama_dusus}
+
+
+def ridge_izi_hesapla(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list) -> dict:
+    """
+    Ridge REGRESYON IZI (ridge trace): ceza parametresi (alpha) ADIM ADIM
+    artirilirken her degiskenin (standardize edilmis) katsayisinin nasil
+    degistigini gosterir. Bu, coklu dogrusal baglantidan kaynaklanan
+    KIRILGAN/YAPAY katsayilari tespit etmenin klasik yontemidir
+    (Hoerl & Kennard, 1970): eger bir degiskenin katsayisi ceza artarken
+    IsARET DEGISTIRIYORSA ya da capraz sicriyorsa, bu, o katsayinin
+    OLS/FE'deki degerinin buyuk olcude coklu dogrusal baglantidan
+    kaynaklanan bir yapaylik oldugunu gosterir -- gercek bir katsayi ceza
+    altinda YUMUSAKCA sifira yaklasir, isaret degistirmez.
+
+    WITHIN (FE-ozgu) veri uzerinde calisir -- yani her degiskenden once
+    kendi DMU-ortalamasi cikarilir -- boylece FE modelindeki (tartisilan)
+    katsayilarla ADIL bir kiyaslama yapilir (Pooled/ham veri degil).
+
+    Returns: dict -- iz_df (index=log10(alpha), columns=bagimsizlar,
+             values=standardize edilmis ridge katsayisi),
+             ols_katsayilar (dict, alpha=0'a karsilik gelen -- yani
+             cezasiz -- referans katsayilar, ayni within/standardize
+             olcekte)
+    """
+    from sklearn.linear_model import Ridge, LinearRegression
+    from sklearn.preprocessing import StandardScaler
+
+    gecerli = [d for d in bagimsizlar if d in panel_df.columns]
+    df_within = panel_df[gecerli + [bagimli]].groupby(level="entity").transform(lambda s: s - s.mean())
+
+    X = df_within[gecerli].values
+    y = df_within[bagimli].values
+
+    scaler = StandardScaler()
+    X_std = scaler.fit_transform(X)
+
+    ols_ref = LinearRegression(fit_intercept=False).fit(X_std, y)
+    ols_katsayilar = dict(zip(gecerli, ols_ref.coef_))
+
+    log_alphalar = np.linspace(-3, 4, 60)  # alpha = 10^-3 .. 10^4
+    satirlar = []
+    for la in log_alphalar:
+        alpha = 10 ** la
+        ridge = Ridge(alpha=alpha, fit_intercept=False).fit(X_std, y)
+        satir = {"log10_alpha": round(float(la), 3)}
+        for i, deg in enumerate(gecerli):
+            satir[deg] = ridge.coef_[i]
+        satirlar.append(satir)
+
+    iz_df = pd.DataFrame(satirlar).set_index("log10_alpha")
+    return {"iz_df": iz_df, "ols_katsayilar": ols_katsayilar}
+
+
 def _panel_test_seti_gecerli_mi(panel_df: pd.DataFrame, bagimli: str, bagimsizlar: list):
     """
     Verilen bagimsizlar seti icin FE, RE, Hausman, Poolability (F-testi) VE
