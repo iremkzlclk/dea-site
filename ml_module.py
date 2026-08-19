@@ -781,3 +781,117 @@ def panel_regresyon_senaryo(sonuc: dict, panel_girdi_yuzdeleri: dict) -> dict:
         "ortalama_degisim_yuzde": round(float(detay_df["Degisim_Yuzde"].mean()), 2),
         "X_senaryo": X_senaryo,
     }
+
+
+def en_uygun_ml_ile_panel_senaryo(sonuc: dict, panel_girdi_yuzdeleri: dict) -> dict:
+    """
+    TEK BIR tahminleyici -- kullaniciya "hangi algoritma?" diye SORMAZ.
+    Veri yapisina (kucuk N, panel/grup yapisi, panel girdileri arasinda
+    olasi kalinti coklu baglanti) uygun birkac adayi ARKA PLANDA
+    GroupKFold (DMU bazinda -- ayni DMU'nun farkli donemleri hic bir
+    zaman ayni anda hem egitimde hem testte olmaz) capraz dogrulamayla
+    KIYASLAR, EN IYI performans gosteren TEK modeli secip onunla senaryo
+    tahmini uretir. Kullaniciya sadece nihai, tek sonuc gosterilir.
+
+    ADAYLAR (neden bunlar):
+    - RidgeCV / LassoCV / ElasticNetCV: kucuk orneklemde (N~75-90) asiri
+      ogrenmeye En DAYANIKLI, kalinti coklu baglantiya karsi da makul
+      (ozellikle ElasticNet -- korele degisken gruplarini BIRLIKTE
+      tutma/eleme egilimindedir).
+    - RandomForestRegressor: veri GERCEKTEN dogrusal olmayan bir iliski
+      tasiyorsa (ornegin bir esik/donum noktasi varsa) yakalayabilir --
+      ama kucuk N'de asiri ogrenmeye yatkin, bu yuzden sadece diger
+      adaylardan GERCEKTEN daha iyi capraz-dogrulama performansi
+      gosterirse secilir.
+
+    panel_girdi_yuzdeleri: {degisken_adi: yuzdesel_degisim}
+
+    Returns: dict -- secilen_model_adi, cv_karsilastirma (DataFrame,
+             seffaflik icin -- hangisinin nicin secildigini gosterir),
+             detay_df (DMU bazinda Son_Gercek_MI, Tahmin_MI, belirsizlik
+             araligi, Degisim_Yuzde), ortalama_tahmin_MI, ortalama_son_MI,
+             ortalama_degisim_yuzde, resid_std
+    """
+    from sklearn.model_selection import GroupKFold, cross_val_score
+
+    panel_df = sonuc["panel_df"]
+    panel_bagimsizlar = list(panel_girdi_yuzdeleri.keys())
+    gecerli = [d for d in panel_bagimsizlar if d in panel_df.columns]
+
+    X = panel_df[gecerli].values
+    y = panel_df["MI"].values
+    gruplar = panel_df.index.get_level_values("entity").values
+    n_unique_dmu = len(set(gruplar))
+    n_split = max(2, min(5, n_unique_dmu))
+    gkf = GroupKFold(n_splits=n_split)
+
+    adaylar = {
+        "Ridge (RidgeCV)": Pipeline([("scale", StandardScaler()), ("model", RidgeCV())]),
+        "Lasso (LassoCV)": Pipeline([("scale", StandardScaler()), ("model", LassoCV(max_iter=10000))]),
+        "ElasticNet (ElasticNetCV)": Pipeline([("scale", StandardScaler()),
+                                                ("model", ElasticNetCV(max_iter=10000))]),
+        "Random Forest": Pipeline([("scale", StandardScaler()),
+                                    ("model", RandomForestRegressor(
+                                        n_estimators=200, max_depth=3, min_samples_leaf=3, random_state=42))]),
+    }
+
+    karsilastirma_satirlari = []
+    en_iyi_isim, en_iyi_skor, en_iyi_pipe = None, -np.inf, None
+    for isim, pipe in adaylar.items():
+        try:
+            skorlar = cross_val_score(pipe, X, y, cv=gkf.split(X, y, groups=gruplar), scoring="r2")
+            ort_skor = float(np.mean(skorlar))
+        except Exception:
+            ort_skor = -np.inf
+        karsilastirma_satirlari.append({"Model": isim, "CV R² (ortalama)": round(ort_skor, 4)})
+        if ort_skor > en_iyi_skor:
+            en_iyi_isim, en_iyi_skor, en_iyi_pipe = isim, ort_skor, pipe
+
+    cv_karsilastirma = pd.DataFrame(karsilastirma_satirlari).sort_values(
+        "CV R² (ortalama)", ascending=False
+    ).reset_index(drop=True)
+
+    # Kazanan modeli TUM veriyle yeniden egit
+    en_iyi_pipe.fit(X, y)
+    tahmin_oof = np.full(len(y), np.nan)
+    for train_idx, test_idx in gkf.split(X, y, groups=gruplar):
+        gecici = Pipeline(en_iyi_pipe.steps).fit(X[train_idx], y[train_idx])
+        tahmin_oof[test_idx] = gecici.predict(X[test_idx])
+    resid_std = float(np.nanstd(y - tahmin_oof))
+
+    # Senaryo: her DMU'nun SON gozlemlenen degerlerini yuzdeyle degistirip tahmin et
+    son_zaman = panel_df.index.get_level_values("time").max()
+    son_df = panel_df.xs(son_zaman, level="time")
+
+    satirlar = []
+    for entity in son_df.index:
+        taban = son_df.loc[entity, gecerli].values.astype(float).copy()
+        for j, col in enumerate(gecerli):
+            taban[j] *= (1 + panel_girdi_yuzdeleri.get(col, 0.0))
+        satirlar.append(taban)
+    X_senaryo = np.array(satirlar)
+    tahmin_senaryo = en_iyi_pipe.predict(X_senaryo)
+
+    detay_satirlari = []
+    for i, entity in enumerate(son_df.index):
+        gercek_son = float(son_df.loc[entity, "MI"])
+        tahmin = float(tahmin_senaryo[i])
+        detay_satirlari.append({
+            "DMU": entity,
+            "Son_Gercek_MI": round(gercek_son, 4),
+            "Tahmin_MI": round(tahmin, 4),
+            "Tahmin_Alt_%95": round(tahmin - 1.96 * resid_std, 4),
+            "Tahmin_Ust_%95": round(tahmin + 1.96 * resid_std, 4),
+            "Degisim_Yuzde": round((tahmin - gercek_son) / gercek_son * 100, 2) if gercek_son else None,
+        })
+    detay_df = pd.DataFrame(detay_satirlari).set_index("DMU")
+
+    return {
+        "secilen_model_adi": en_iyi_isim,
+        "cv_karsilastirma": cv_karsilastirma,
+        "resid_std": resid_std,
+        "detay_df": detay_df,
+        "ortalama_tahmin_MI": round(float(detay_df["Tahmin_MI"].mean()), 4),
+        "ortalama_son_MI": round(float(detay_df["Son_Gercek_MI"].mean()), 4),
+        "ortalama_degisim_yuzde": round(float(detay_df["Degisim_Yuzde"].mean()), 2),
+    }

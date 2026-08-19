@@ -14,7 +14,7 @@ from dea_module import min_dmu_kontrolu
 from panel_module import leave_one_out_kararlilik, aciklayicilik_analizi, degisken_varyans_analizi, run_panel_analysis, korelasyon_ve_vif_hesapla
 from pipeline import run_pipeline
 from backtest_module import backtest_calistir, rolling_backtest_calistir
-from ml_module import gelecek_donem_dea_senaryo, panel_regresyon_senaryo
+from ml_module import gelecek_donem_dea_senaryo, panel_regresyon_senaryo, en_uygun_ml_ile_panel_senaryo
 from yorumlama import (
     malmquist_yorum_metni,
     malmquist_donem_ortalamasi,
@@ -1157,121 +1157,195 @@ if "sonuc" in st.session_state:
     with tab_ml:
         st.markdown("### 🔮 Gelecek Dönem Tahmini")
         st.markdown("""
-        **Bu sayfa ne yapar?** Panel Analizi sekmesinde kurulan **regresyon modelinin
-        katsayılarını** kullanır -- DEA'yı yeniden ÇÖZMEZ. Panel analizinde kullandığınız
-        girdiler için **Artır/Azalt** seçip bir yüzde yazarsınız ("bu girdiyi %X
-        artırırsam/azaltırsam"), sistem son dönem değerlerinizi bu yüzdeyle değiştirip
-        regresyon denklemine (ŷ = sabit + Σ katsayı × girdi) sokarak **yeni bir MI
-        tahmini** üretir.
+        Verimliliğinizi (MI) etkileyen **iki farklı kanal** var, ve bunları KARIŞTIRMADAN
+        ayrı ayrı incelemeniz gerekiyor:
+        - **A) DEA Girdi Senaryosu:** Üretim sürecinin kendisini (DEA girdilerini)
+          değiştirirseniz, MI **mekanik/deterministik** olarak ne olur?
+        - **B) Panel Girdi Senaryosu:** Çevresel/organizasyonel faktörler (panel
+          girdileri) değişirse, MI ile **istatistiksel** olarak ne ilişkilenir?
 
-        ⚠️ **Bu bir istatistiksel tahmindir, DEA'nın kendi optimizasyonu değildir** --
-        bu yüzden EC/TC ayrıştırması yoktur, sadece tek bir MI tahmini ve (modelin
-        düşük R²'si nedeniyle geniş olabilecek) bir belirsizlik aralığı verilir.
+        ⚠️ **Bu ikisinin sonuçlarını TOPLAMAYIN** -- farklı sorulara cevap veriyorlar
+        (biri deterministik DEA optimizasyonu, diğeri istatistiksel regresyon tahmini);
+        toplamak çifte sayıma yol açar.
         """)
 
-        st.write("---")
-        st.markdown("#### 🎛️ Panel Girdilerinizi Ayarlayın")
+        alt_sekme_dea, alt_sekme_panel = st.tabs([
+            "A) DEA Girdi Senaryosu (Mekanik)", "B) Panel Girdi Senaryosu (İstatistiksel)"
+        ])
 
-        p_ml = sonuc["panel_sonuc"]
-        oneri_ml = p_ml["oneri"]
-        tablo_map_ml = {
-            "pooled_robust": p_ml["pooled_robust"], "pooled_clustered": p_ml["pooled_clustered"],
-            "fe_robust": p_ml["fe_robust"], "fe_clustered": p_ml["fe_clustered"],
-            "re_robust": p_ml["re_robust"], "re_clustered": p_ml["re_clustered"],
-        }
-        nihai_res_ml = tablo_map_ml[oneri_ml["sonuc_tablo"]]
-        panel_bagimsizlar_ml = [v for v in nihai_res_ml.params.index if v != "const"]
-
-        st.caption(
-            f"Nihai modelde ({oneri_ml['sonuc_basligi']}) kullanılan değişkenler burada "
-            f"listelenir -- zaman-sabitlik ya da eş-doğrusallık nedeniyle modelden "
-            f"çıkarılmış girdiler (varsa) burada görünmez, çünkü onların regresyon "
-            f"katsayısı yoktur, senaryo etkisi hesaplanamaz."
-        )
-
-        panel_girdi_yuzdeleri = {}
-        for g in panel_bagimsizlar_ml:
-            with st.container(border=True):
-                st.write(f"**{g}**")
-                cc1, cc2 = st.columns([1, 1])
-                with cc1:
-                    yon_secim = st.radio(
-                        "Yön", ["Değiştirme", "Artır", "Azalt"], index=0,
-                        key=f"panel_ml_yon_{g}", horizontal=True,
-                    )
-                with cc2:
-                    if yon_secim != "Değiştirme":
-                        yuzde_deger = st.number_input(
-                            "Yüzde (%)", min_value=0.0, max_value=100.0, value=10.0, step=1.0,
-                            key=f"panel_ml_yuzde_{g}",
+        with alt_sekme_dea:
+            st.caption(
+                "Seçtiğiniz DEA girdilerini (yalnızca bunlar -- Girdi_Model Hazırlama Süresi, "
+                "Girdi_Study Run Süresi gibi) değiştirin; sistem GERÇEK bir DEA/Malmquist LP "
+                "çözümü yaparak (istatistiksel tahmin değil) yeni MI'yi hesaplar. Belirsizlik "
+                "aralığı yoktur -- matematiksel kesinliktir, ama SADECE girdi-çıktı ilişkisinin "
+                "geleceğe de aynen uygulandığı varsayımına dayanır."
+            )
+            dea_girdileri_ml = sonuc["dea_girdiler"]
+            dea_yuzdeleri = {}
+            for g in dea_girdileri_ml:
+                with st.container(border=True):
+                    st.write(f"**{g}**")
+                    dc1, dc2 = st.columns([1, 1])
+                    with dc1:
+                        dea_yon = st.radio(
+                            "Yön", ["Değiştirme", "Artır", "Azalt"], index=0,
+                            key=f"dea_ml_yon_{g}", horizontal=True,
                         )
+                    with dc2:
+                        if dea_yon != "Değiştirme":
+                            dea_yuzde_deger = st.number_input(
+                                "Yüzde (%)", min_value=0.0, max_value=100.0, value=10.0, step=1.0,
+                                key=f"dea_ml_yuzde_{g}",
+                            )
+                        else:
+                            dea_yuzde_deger = 0.0
+                    if dea_yon == "Artır":
+                        dea_yuzdeleri[g] = dea_yuzde_deger / 100.0
+                    elif dea_yon == "Azalt":
+                        dea_yuzdeleri[g] = -dea_yuzde_deger / 100.0
                     else:
-                        yuzde_deger = 0.0
-                if yon_secim == "Artır":
-                    panel_girdi_yuzdeleri[g] = yuzde_deger / 100.0
-                elif yon_secim == "Azalt":
-                    panel_girdi_yuzdeleri[g] = -yuzde_deger / 100.0
+                        dea_yuzdeleri[g] = 0.0
+
+            if st.button("Senaryoyu Hesapla (DEA/Malmquist)", type="primary", key="dea_ml_hesapla_btn"):
+                if all(v == 0 for v in dea_yuzdeleri.values()):
+                    st.info("Henüz bir girdi için Artır/Azalt seçmediniz.")
                 else:
-                    panel_girdi_yuzdeleri[g] = 0.0
+                    with st.spinner("DEA/Malmquist yeniden çözülüyor..."):
+                        try:
+                            r_dea = gelecek_donem_dea_senaryo(
+                                sonuc, sonuc["dea_girdiler"], sonuc["dea_ciktilar"], dea_yuzdeleri
+                            )
+                            st.session_state["dea_ml_sonuc"] = {"veri": r_dea, "hata": None}
+                        except Exception as e:
+                            st.session_state["dea_ml_sonuc"] = {"hata": str(e)}
 
-        hesapla_tiklandi = st.button(
-            "Senaryoyu Hesapla (Panel Regresyonu)", type="primary", key="panel_ml_hesapla_btn"
-        )
-
-        if hesapla_tiklandi:
-            if all(v == 0 for v in panel_girdi_yuzdeleri.values()):
-                st.info("Henüz bir girdi için Artır/Azalt seçmediniz -- yukarıdan seçim yapın.")
-            else:
-                with st.spinner("Panel regresyonu katsayılarıyla tahmin hesaplanıyor..."):
-                    try:
-                        r_ml = panel_regresyon_senaryo(sonuc, panel_girdi_yuzdeleri)
-                        st.session_state["panel_ml_sonuc"] = {"veri": r_ml, "hata": None}
-                    except Exception as e:
-                        st.session_state["panel_ml_sonuc"] = {"hata": str(e)}
-
-        if "panel_ml_sonuc" in st.session_state:
-            paket = st.session_state["panel_ml_sonuc"]
-            if paket.get("hata"):
-                st.error(f"❌ Hesaplanamadı. Hata detayı (bunu paylaşırsanız hemen düzeltebilirim):\n\n`{paket['hata']}`")
-            else:
-                r = paket["veri"]
-                st.write("---")
-                st.markdown("#### 📈 Bu Senaryonun Etkisi")
-
-                degisim = r["ortalama_degisim_yuzde"]
-                if degisim > 0.5:
-                    st.success(f"## ✅ Tahmini verimlilik değişimi: %{degisim:+.1f} (artış)")
-                elif degisim < -0.5:
-                    st.warning(f"## ⚠️ Tahmini verimlilik değişimi: %{degisim:+.1f} (azalış)")
+            if "dea_ml_sonuc" in st.session_state:
+                paket_dea = st.session_state["dea_ml_sonuc"]
+                if paket_dea.get("hata"):
+                    st.error(f"❌ Hesaplanamadı: `{paket_dea['hata']}`")
                 else:
-                    st.info(f"## Tahmini verimlilik değişimi: %{degisim:+.1f} (pratikte değişim yok)")
+                    r = paket_dea["veri"]
+                    degisim = r["degisim_yuzde"]
+                    if degisim > 0.5:
+                        st.success(f"## ✅ Mekanik MI değişimi: %{degisim:+.1f} (artış)")
+                    elif degisim < -0.5:
+                        st.warning(f"## ⚠️ Mekanik MI değişimi: %{degisim:+.1f} (azalış)")
+                    else:
+                        st.info(f"## Mekanik MI değişimi: %{degisim:+.1f}")
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Ortalama EC", round(r["ortalama_EC"], 4))
+                    c2.metric("Ortalama TC", round(r["ortalama_TC"], 4))
+                    c3.metric("Ortalama M", round(r["ortalama_M"], 4))
+                    with st.expander("DMU bazında detay"):
+                        st.dataframe(r["detay_df"], use_container_width=True)
+                    with st.expander("Oluşturulan senaryo verisi (girdi + tahmini çıktı)"):
+                        st.write("*Girdiler (sizin yüzdenizle değiştirilmiş)*")
+                        st.dataframe(r["X_senaryo"], use_container_width=True)
+                        st.write("*Çıktılar (girdilerle tutarlı, ayrıca tahmin edilmiş)*")
+                        st.dataframe(r["Y_senaryo"], use_container_width=True)
 
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Son gerçek MI (ortalama)", r["ortalama_son_MI"])
-                c2.metric("Tahmin edilen MI (ortalama)", r["ortalama_tahmin_MI"])
-                c3.metric("Modelin R²'si", round(r["r_kare"], 4))
-                st.caption(
-                    f"R² ne kadar düşükse, aşağıdaki tahmin aralığı o kadar geniş olur -- "
-                    f"bu modelin bir hatası değil, düşük açıklama gücünün doğal bir "
-                    f"sonucudur (bkz. Panel Analizi sekmesindeki R² tartışması). Kaba "
-                    f"%95 belirsizlik aralığı, modelin kalıntı standart sapması "
-                    f"({round(r['resid_std'], 4) if r['resid_std'] == r['resid_std'] else 'hesaplanamadı'}) "
-                    f"kullanılarak hesaplanmıştır."
-                )
+        with alt_sekme_panel:
 
-                with st.expander("DMU (proje) bazında detay (tahmin + belirsizlik aralığı)"):
-                    st.dataframe(r["detay_df"], use_container_width=True)
-                    st.download_button(
-                        "Detayı Excel indir", excel_indirme_verisi(r["detay_df"]),
-                        file_name="panel_regresyon_senaryo.xlsx", mime=EXCEL_MIME, key="panel_ml_detay_dl",
-                    )
+            p_ml = sonuc["panel_sonuc"]
+            oneri_ml = p_ml["oneri"]
+            tablo_map_ml = {
+                "pooled_robust": p_ml["pooled_robust"], "pooled_clustered": p_ml["pooled_clustered"],
+                "fe_robust": p_ml["fe_robust"], "fe_clustered": p_ml["fe_clustered"],
+                "re_robust": p_ml["re_robust"], "re_clustered": p_ml["re_clustered"],
+            }
+            nihai_res_ml = tablo_map_ml[oneri_ml["sonuc_tablo"]]
+            panel_bagimsizlar_ml = [v for v in nihai_res_ml.params.index if v != "const"]
 
-                with st.expander("Oluşturulan senaryo verisi (panel girdileri)"):
+            st.caption(
+                f"Nihai modelde ({oneri_ml['sonuc_basligi']}) kullanılan değişkenler burada "
+                f"listelenir -- zaman-sabitlik ya da eş-doğrusallık nedeniyle modelden "
+                f"çıkarılmış girdiler (varsa) burada görünmez, çünkü onların regresyon "
+                f"katsayısı yoktur, senaryo etkisi hesaplanamaz."
+            )
+
+            panel_girdi_yuzdeleri = {}
+            for g in panel_bagimsizlar_ml:
+                with st.container(border=True):
+                    st.write(f"**{g}**")
+                    cc1, cc2 = st.columns([1, 1])
+                    with cc1:
+                        yon_secim = st.radio(
+                            "Yön", ["Değiştirme", "Artır", "Azalt"], index=0,
+                            key=f"panel_ml_yon_{g}", horizontal=True,
+                        )
+                    with cc2:
+                        if yon_secim != "Değiştirme":
+                            yuzde_deger = st.number_input(
+                                "Yüzde (%)", min_value=0.0, max_value=100.0, value=10.0, step=1.0,
+                                key=f"panel_ml_yuzde_{g}",
+                            )
+                        else:
+                            yuzde_deger = 0.0
+                    if yon_secim == "Artır":
+                        panel_girdi_yuzdeleri[g] = yuzde_deger / 100.0
+                    elif yon_secim == "Azalt":
+                        panel_girdi_yuzdeleri[g] = -yuzde_deger / 100.0
+                    else:
+                        panel_girdi_yuzdeleri[g] = 0.0
+
+            hesapla_tiklandi = st.button(
+                "Senaryoyu Hesapla (Otomatik Model Seçimi)", type="primary", key="panel_ml_hesapla_btn"
+            )
+
+            if hesapla_tiklandi:
+                if all(v == 0 for v in panel_girdi_yuzdeleri.values()):
+                    st.info("Henüz bir girdi için Artır/Azalt seçmediniz -- yukarıdan seçim yapın.")
+                else:
+                    with st.spinner("Uygun makine öğrenmesi algoritması otomatik seçilip tahmin hesaplanıyor..."):
+                        try:
+                            r_ml = en_uygun_ml_ile_panel_senaryo(sonuc, panel_girdi_yuzdeleri)
+                            st.session_state["panel_ml_sonuc"] = {"veri": r_ml, "hata": None}
+                        except Exception as e:
+                            st.session_state["panel_ml_sonuc"] = {"hata": str(e)}
+
+            if "panel_ml_sonuc" in st.session_state:
+                paket = st.session_state["panel_ml_sonuc"]
+                if paket.get("hata"):
+                    st.error(f"❌ Hesaplanamadı. Hata detayı (bunu paylaşırsanız hemen düzeltebilirim):\n\n`{paket['hata']}`")
+                else:
+                    r = paket["veri"]
+                    st.write("---")
+                    st.markdown("#### 📈 Bu Senaryonun Etkisi")
+
+                    degisim = r["ortalama_degisim_yuzde"]
+                    if degisim > 0.5:
+                        st.success(f"## ✅ Tahmini verimlilik değişimi: %{degisim:+.1f} (artış)")
+                    elif degisim < -0.5:
+                        st.warning(f"## ⚠️ Tahmini verimlilik değişimi: %{degisim:+.1f} (azalış)")
+                    else:
+                        st.info(f"## Tahmini verimlilik değişimi: %{degisim:+.1f} (pratikte değişim yok)")
+
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Son gerçek MI (ortalama)", r["ortalama_son_MI"])
+                    c2.metric("Tahmin edilen MI (ortalama)", r["ortalama_tahmin_MI"])
+                    c3.metric("Kalıntı std. sapma", round(r["resid_std"], 4))
                     st.caption(
-                        "Bu, regresyon denklemine verilen sayılar -- son dönem gerçek "
-                        "değerleriniz, sizin seçtiğiniz yüzdeyle değiştirilmiş halidir."
+                        f"Kullanılan algoritma: **{r['secilen_model_adi']}** -- veri yapınıza (küçük "
+                        f"örneklem, panel/grup yapısı) en uygun olan, birkaç aday arasından DMU-bazlı "
+                        f"çapraz doğrulamayla ARKA PLANDA otomatik seçildi. Aşağıdaki %95 belirsizlik "
+                        f"aralığı, modelin çapraz-doğrulanmış kalıntı standart sapmasından hesaplanmıştır."
                     )
-                    st.dataframe(r["X_senaryo"], use_container_width=True)
+
+                    with st.expander("Hangi algoritma neden seçildi? (şeffaflık için)"):
+                        st.caption(
+                            "Her aday, DMU bazlı GroupKFold çapraz doğrulamayla (aynı DMU'nun farklı "
+                            "dönemleri asla aynı anda hem eğitimde hem testte olmaz) karşılaştırıldı. "
+                            "En yüksek ortalama CV R² değerine sahip olan otomatik seçildi."
+                        )
+                        st.dataframe(r["cv_karsilastirma"], use_container_width=True, hide_index=True)
+
+                    with st.expander("DMU (proje) bazında detay (tahmin + belirsizlik aralığı)"):
+                        st.dataframe(r["detay_df"], use_container_width=True)
+                        st.download_button(
+                            "Detayı Excel indir", excel_indirme_verisi(r["detay_df"]),
+                            file_name="panel_ml_senaryo.xlsx", mime=EXCEL_MIME, key="panel_ml_detay_dl",
+                        )
     with tab_aciklayici:
         st.markdown("### 📊 Açıklayıcılık Analizi — Hangi Değişken En İyi Açıklıyor?")
         st.markdown("""
