@@ -14,7 +14,7 @@ from dea_module import min_dmu_kontrolu
 from panel_module import leave_one_out_kararlilik, aciklayicilik_analizi, degisken_varyans_analizi, run_panel_analysis, korelasyon_ve_vif_hesapla
 from pipeline import run_pipeline
 from backtest_module import backtest_calistir, rolling_backtest_calistir
-from ml_module import gelecek_donem_dea_senaryo, panel_regresyon_senaryo, en_uygun_ml_ile_panel_senaryo, rolling_backtest_ml_karsilastir
+from ml_module import gelecek_donem_dea_senaryo, panel_regresyon_senaryo
 from yorumlama import (
     malmquist_yorum_metni,
     malmquist_donem_ortalamasi,
@@ -403,9 +403,9 @@ if "sonuc" in st.session_state:
     cikti_cols = sonuc["dea_ciktilar"]
     panel_girdiler = sonuc["panel_girdiler"]
 
-    tab_dea, tab_malmquist, tab_panel, tab_aciklayici, tab_backtest, tab_ml = st.tabs(
-        ["DEA Sonuclari", "Malmquist Sonuclari", "Panel Analizi", "Açıklayıcılık",
-         "Backtest (Model Dogrulama)", "ML Tahmin"]
+    tab_dea, tab_malmquist, tab_panel, tab_yorum, tab_aciklayici, tab_backtest, tab_ml = st.tabs(
+        ["DEA Sonuclari", "Malmquist Sonuclari", "Panel Analizi", "📖 Sonuç Yorumlama",
+         "Açıklayıcılık", "Backtest (Model Dogrulama)", "ML Tahmin"]
     )
 
     with tab_dea:
@@ -907,6 +907,93 @@ if "sonuc" in st.session_state:
         st.write("*Model ozet istatistikleri*")
         st.dataframe(ozet_tablo, use_container_width=True)
 
+    with tab_yorum:
+        st.markdown("### 📖 Panel Sonuçlarının Yorumu — Yön, Anlamlılık, Büyüklük")
+        st.caption(
+            "Bu sayfa YENİ bir istatistiksel hesaplama YAPMAZ -- Panel Analizi sekmesindeki "
+            "NİHAİ modelin (Pooled/FE/RE, hangisi seçildiyse) sonuçlarını, teknik tabloların "
+            "ötesinde düz Türkçe olarak, değişken bazında yorumlar. Amaç: 'hangi girdi, "
+            "verimliliği hangi yönde ve ne kadar güçlü etkiliyor?' sorusuna hızlı, okunur "
+            "bir cevap vermek."
+        )
+
+        p_yorum = sonuc["panel_sonuc"]
+        oneri_yorum = p_yorum["oneri"]
+        tablo_map_yorum = {
+            "pooled_robust": ("Pooled OLS - Robust", p_yorum["pooled_robust"]),
+            "pooled_clustered": ("Pooled OLS - Clustered", p_yorum["pooled_clustered"]),
+            "fe_robust": ("FE - Robust", p_yorum["fe_robust"]),
+            "fe_clustered": ("FE - Clustered", p_yorum["fe_clustered"]),
+            "re_robust": ("RE - Robust", p_yorum["re_robust"]),
+            "re_clustered": ("RE - Clustered", p_yorum["re_clustered"]),
+        }
+        nihai_baslik_yorum, nihai_res_yorum = tablo_map_yorum[oneri_yorum["sonuc_tablo"]]
+        st.info(f"Yorumlanan model: **{nihai_baslik_yorum}**")
+
+        YORUM_ALPHA = 0.10
+        analiz_df_yorum = panel_aksiyon_analizi(
+            nihai_res_yorum, girdi_cols, cikti_cols, sonuc["panel_df"], alpha=YORUM_ALPHA,
+        )
+
+        anlamli_df = analiz_df_yorum[analiz_df_yorum["anlamli_mi"]].sort_values(
+            "mi_etkisi_yuzde10", key=abs, ascending=False
+        )
+        anlamsiz_df = analiz_df_yorum[~analiz_df_yorum["anlamli_mi"]]
+
+        if anlamli_df.empty:
+            st.warning(
+                f"⚠️ p<{YORUM_ALPHA:.2f} eşiğinde istatistiksel olarak anlamlı hiçbir değişken "
+                f"bulunamadı -- bu durumda net, sayısal bir yorum sunmak yanıltıcı olur."
+            )
+        else:
+            st.markdown("#### Anlamlı Değişkenler — Etki Sırasına Göre (büyükten küçüğe)")
+            for _, row in anlamli_df.iterrows():
+                pozitif = row["mi_etkisi_yuzde10"] > 0
+                renk = "🟢" if pozitif else "🔴"
+                yon_kelime = "ARTIRIYOR" if pozitif else "AZALTIYOR"
+                isim_temiz = str(row["degisken"]).replace("Girdi_", "").replace("Cikti_", "")
+                with st.container(border=True):
+                    st.markdown(f"##### {renk} {isim_temiz}")
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Katsayı", round(row["katsayi"], 4))
+                    c2.metric("P-değeri", round(row["p_degeri"], 4))
+                    c3.metric("%10'luk değişim etkisi (MI puanı)", round(row["mi_etkisi_yuzde10"], 4))
+                    st.markdown(
+                        f"Bu değişken, ortalama değerinin **%10 kadar değişmesi** durumunda "
+                        f"verimliliği (MI'yi) istatistiksel olarak anlamlı şekilde **{yon_kelime}** "
+                        f"(p={round(row['p_degeri'],4)} < {YORUM_ALPHA:.2f})."
+                    )
+                    if row.get("celiski"):
+                        st.warning(
+                            f"⚠️ Bu ilişkinin yönü ({row['gercek_yon']}), teorik beklentiyle "
+                            f"({row['beklenen_yon']}) çelişiyor -- dikkatli yorumlanmalı."
+                        )
+
+            st.write("---")
+            st.markdown("#### Görsel Özet")
+            gorsel_seri = anlamli_df.set_index("degisken")["mi_etkisi_yuzde10"]
+            st.bar_chart(gorsel_seri)
+
+        if not anlamsiz_df.empty:
+            with st.expander(f"İstatistiksel olarak anlamlı BULUNAMAYAN değişkenler ({len(anlamsiz_df)} adet)"):
+                st.caption(
+                    "Bu değişkenlerin katsayısı sıfırdan istatistiksel olarak ayırt edilemiyor -- "
+                    "yönü/büyüklüğü hakkında güvenilir bir yorum yapılamaz."
+                )
+                st.dataframe(
+                    anlamsiz_df[["degisken", "katsayi", "p_degeri"]], use_container_width=True, hide_index=True,
+                )
+
+        st.write("---")
+        st.markdown("#### Tam Metin Özeti")
+        st.markdown(panel_aksiyon_metni(analiz_df_yorum))
+
+        with st.expander("Tüm değişkenlerin tam tablosu"):
+            st.dataframe(
+                analiz_df_yorum.style.apply(_katsayi_renklendir, axis=1),
+                use_container_width=True, hide_index=True,
+            )
+
     with tab_backtest:
         st.markdown("### 🎯 Backtest — Panel Modelinin Gercek Tahmin Gucu")
         st.markdown("""
@@ -1298,10 +1385,13 @@ if "sonuc" in st.session_state:
             panel_bagimsizlar_ml = [v for v in nihai_res_ml.params.index if v != "const"]
 
             st.caption(
-                f"Nihai modelde ({oneri_ml['sonuc_basligi']}) kullanılan değişkenler burada "
-                f"listelenir -- zaman-sabitlik ya da eş-doğrusallık nedeniyle modelden "
-                f"çıkarılmış girdiler (varsa) burada görünmez, çünkü onların regresyon "
-                f"katsayısı yoktur, senaryo etkisi hesaplanamaz."
+                f"Bu bölüm, Bölüm 6'daki (Panel Analizi sekmesindeki) NİHAİ modelin "
+                f"({oneri_ml['sonuc_basligi']}) katsayılarını KULLANIR -- ayrı bir makine "
+                f"öğrenmesi modeli EĞİTMEZ. Yani burada gördüğünüz tahmin, çıkarım için "
+                f"kullandığınız MODELİN AYNISIDIR -- tamamen deterministiktir (aynı girdiyle "
+                f"her zaman birebir aynı sonucu verir, ortamdan/platformdan bağımsızdır). "
+                f"Zaman-sabitlik ya da eş-doğrusallık nedeniyle nihai modelden çıkarılmış "
+                f"girdiler (varsa) burada görünmez, çünkü onların regresyon katsayısı yoktur."
             )
 
             panel_girdi_yuzdeleri = {}
@@ -1330,16 +1420,16 @@ if "sonuc" in st.session_state:
                         panel_girdi_yuzdeleri[g] = 0.0
 
             hesapla_tiklandi = st.button(
-                "Senaryoyu Hesapla (Otomatik Model Seçimi)", type="primary", key="panel_ml_hesapla_btn"
+                "Senaryoyu Hesapla (Panel Regresyonu)", type="primary", key="panel_ml_hesapla_btn"
             )
 
             if hesapla_tiklandi:
                 if all(v == 0 for v in panel_girdi_yuzdeleri.values()):
                     st.info("Henüz bir girdi için Artır/Azalt seçmediniz -- yukarıdan seçim yapın.")
                 else:
-                    with st.spinner("Uygun makine öğrenmesi algoritması otomatik seçilip tahmin hesaplanıyor..."):
+                    with st.spinner("Panel regresyonu katsayılarıyla tahmin hesaplanıyor..."):
                         try:
-                            r_ml = en_uygun_ml_ile_panel_senaryo(sonuc, panel_girdi_yuzdeleri)
+                            r_ml = panel_regresyon_senaryo(sonuc, panel_girdi_yuzdeleri)
                             st.session_state["panel_ml_sonuc"] = {"veri": r_ml, "hata": None}
                         except Exception as e:
                             st.session_state["panel_ml_sonuc"] = {"hata": str(e)}
@@ -1364,64 +1454,31 @@ if "sonuc" in st.session_state:
                     c1, c2, c3 = st.columns(3)
                     c1.metric("Son gerçek MI (ortalama)", r["ortalama_son_MI"])
                     c2.metric("Tahmin edilen MI (ortalama)", r["ortalama_tahmin_MI"])
-                    c3.metric("Kalıntı std. sapma", round(r["resid_std"], 4))
+                    c3.metric("Modelin R²'si", round(r["r_kare"], 4))
                     st.caption(
-                        f"Kullanılan algoritma: **{r['secilen_model_adi']}** -- veri yapınıza (küçük "
-                        f"örneklem, panel/grup yapısı) en uygun olan, birkaç aday arasından DMU-bazlı "
-                        f"çapraz doğrulamayla ARKA PLANDA otomatik seçildi. Aşağıdaki %95 belirsizlik "
-                        f"aralığı, modelin çapraz-doğrulanmış kalıntı standart sapmasından hesaplanmıştır."
+                        f"R² ne kadar düşükse, aşağıdaki tahmin aralığı o kadar geniş olur -- "
+                        f"bu modelin bir hatası değil, düşük açıklama gücünün doğal bir "
+                        f"sonucudur (bkz. Panel Analizi sekmesindeki R² tartışması). %95 "
+                        f"belirsizlik aralığı, modelin kalıntı standart sapmasından "
+                        f"({round(r['resid_std'], 4) if r['resid_std'] == r['resid_std'] else 'hesaplanamadı'}) "
+                        f"hesaplanmıştır -- tamamen deterministiktir, platforma göre değişmez."
                     )
-
-                    with st.expander("Hangi algoritma neden seçildi? (şeffaflık için)"):
-                        st.caption(
-                            "Her aday, DMU bazlı GroupKFold çapraz doğrulamayla (aynı DMU'nun farklı "
-                            "dönemleri asla aynı anda hem eğitimde hem testte olmaz) karşılaştırıldı. "
-                            "En yüksek ortalama CV R² değerine sahip olan otomatik seçildi."
-                        )
-                        st.dataframe(r["cv_karsilastirma"], use_container_width=True, hide_index=True)
-
-                    with st.expander("📈 İleriye Dönük (Rolling/Walk-Forward) Doğrulama — daha sıkı bir test"):
-                        st.caption(
-                            "Yukarıdaki GroupKFold karşılaştırması DMU bazlı böler ve \"hangi model sınıfı "
-                            "MI'yi genel olarak daha iyi açıklıyor?\" sorusuna cevap verir. Burası ise ZAMAN "
-                            "bazlı böler: mümkün olan HER dönem geçişi sırayla test için ayrılır (o ana "
-                            "kadarki tüm geçmişle eğitilip bir SONRAKİ dönem tahmin edilir) -- \"gerçekten "
-                            "GELECEĞİ tahmin etsem ne kadar isabetli olurdum?\" sorusuna cevap verir. Bu, "
-                            "gerçek ileriye-dönük tahmin performansı için GroupKFold'dan daha sıkı/gerçekçi "
-                            "bir testtir."
-                        )
-                        roll = rolling_backtest_ml_karsilastir(sonuc["panel_df"], panel_bagimsizlar_ml)
-                        if not roll["yeterli_veri"]:
-                            st.info(roll["mesaj"])
-                        else:
-                            st.caption(
-                                f"{roll['kat_sayisi']} / {roll['denenen_kat_sayisi']} dönem geçişi "
-                                f"başarıyla test edildi. En düşük MAE'ye (ortalama mutlak hata) sahip: "
-                                f"**{roll['en_iyi_model_adi']}**"
-                            )
-                            st.dataframe(roll["karsilastirma"], use_container_width=True, hide_index=True)
-                            if roll["en_iyi_model_adi"] != r["secilen_model_adi"]:
-                                st.warning(
-                                    f"⚠️ GroupKFold ile Rolling doğrulama **farklı** modelleri en iyi "
-                                    f"seçiyor (GroupKFold: {r['secilen_model_adi']}, Rolling: "
-                                    f"{roll['en_iyi_model_adi']}) -- bu, küçük örneklemde model sıralamasının "
-                                    f"doğrulama yöntemine duyarlı olduğunu gösterir; kesin bir sonuç yerine "
-                                    f"dikkatli bir yorum gerektirir."
-                                )
-                            else:
-                                st.success(
-                                    f"✅ Her iki doğrulama yöntemi de aynı modeli ({r['secilen_model_adi']}) "
-                                    f"en iyi buluyor -- bu, seçimin doğrulama yöntemine duyarlı olmadığını, "
-                                    f"dolayısıyla daha güvenilir olduğunu gösterir."
-                                )
 
                     with st.expander("DMU (proje) bazında detay (tahmin + belirsizlik aralığı)"):
                         st.dataframe(r["detay_df"], use_container_width=True)
                         st.download_button(
                             "Detayı Excel indir", excel_indirme_verisi(r["detay_df"]),
-                            file_name="panel_ml_senaryo.xlsx", mime=EXCEL_MIME, key="panel_ml_detay_dl",
+                            file_name="panel_regresyon_senaryo.xlsx", mime=EXCEL_MIME, key="panel_ml_detay_dl",
                         )
+
+                    with st.expander("Oluşturulan senaryo verisi (panel girdileri)"):
+                        st.caption(
+                            "Bu, regresyon denklemine verilen sayılar -- son dönem gerçek "
+                            "değerleriniz, sizin seçtiğiniz yüzdeyle değiştirilmiş halidir."
+                        )
+                        st.dataframe(r["X_senaryo"], use_container_width=True)
     with tab_aciklayici:
+        st.markdown("### 📊 Açıklayıcılık Analizi — Hangi Değişken En İyi Açıklıyor?")
         st.markdown("### 📊 Açıklayıcılık Analizi — Hangi Değişken En İyi Açıklıyor?")
         st.markdown("""
         Panel Analizi sekmesinde gördüğünüz **R²** (modelin MI'deki değişimin ne kadarını
