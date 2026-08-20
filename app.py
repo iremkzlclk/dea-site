@@ -14,7 +14,7 @@ from dea_module import min_dmu_kontrolu
 from panel_module import leave_one_out_kararlilik, aciklayicilik_analizi, degisken_varyans_analizi, run_panel_analysis, korelasyon_ve_vif_hesapla
 from pipeline import run_pipeline
 from backtest_module import backtest_calistir, rolling_backtest_calistir
-from ml_module import gelecek_donem_dea_senaryo, panel_regresyon_senaryo, en_uygun_ml_ile_panel_senaryo
+from ml_module import gelecek_donem_dea_senaryo, panel_regresyon_senaryo, en_uygun_ml_ile_panel_senaryo, rolling_backtest_ml_karsilastir
 from yorumlama import (
     malmquist_yorum_metni,
     malmquist_donem_ortalamasi,
@@ -1339,6 +1339,41 @@ if "sonuc" in st.session_state:
                             "En yüksek ortalama CV R² değerine sahip olan otomatik seçildi."
                         )
                         st.dataframe(r["cv_karsilastirma"], use_container_width=True, hide_index=True)
+
+                    with st.expander("📈 İleriye Dönük (Rolling/Walk-Forward) Doğrulama — daha sıkı bir test"):
+                        st.caption(
+                            "Yukarıdaki GroupKFold karşılaştırması DMU bazlı böler ve \"hangi model sınıfı "
+                            "MI'yi genel olarak daha iyi açıklıyor?\" sorusuna cevap verir. Burası ise ZAMAN "
+                            "bazlı böler: mümkün olan HER dönem geçişi sırayla test için ayrılır (o ana "
+                            "kadarki tüm geçmişle eğitilip bir SONRAKİ dönem tahmin edilir) -- \"gerçekten "
+                            "GELECEĞİ tahmin etsem ne kadar isabetli olurdum?\" sorusuna cevap verir. Bu, "
+                            "gerçek ileriye-dönük tahmin performansı için GroupKFold'dan daha sıkı/gerçekçi "
+                            "bir testtir."
+                        )
+                        roll = rolling_backtest_ml_karsilastir(sonuc["panel_df"], panel_bagimsizlar_ml)
+                        if not roll["yeterli_veri"]:
+                            st.info(roll["mesaj"])
+                        else:
+                            st.caption(
+                                f"{roll['kat_sayisi']} / {roll['denenen_kat_sayisi']} dönem geçişi "
+                                f"başarıyla test edildi. En düşük MAE'ye (ortalama mutlak hata) sahip: "
+                                f"**{roll['en_iyi_model_adi']}**"
+                            )
+                            st.dataframe(roll["karsilastirma"], use_container_width=True, hide_index=True)
+                            if roll["en_iyi_model_adi"] != r["secilen_model_adi"]:
+                                st.warning(
+                                    f"⚠️ GroupKFold ile Rolling doğrulama **farklı** modelleri en iyi "
+                                    f"seçiyor (GroupKFold: {r['secilen_model_adi']}, Rolling: "
+                                    f"{roll['en_iyi_model_adi']}) -- bu, küçük örneklemde model sıralamasının "
+                                    f"doğrulama yöntemine duyarlı olduğunu gösterir; kesin bir sonuç yerine "
+                                    f"dikkatli bir yorum gerektirir."
+                                )
+                            else:
+                                st.success(
+                                    f"✅ Her iki doğrulama yöntemi de aynı modeli ({r['secilen_model_adi']}) "
+                                    f"en iyi buluyor -- bu, seçimin doğrulama yöntemine duyarlı olmadığını, "
+                                    f"dolayısıyla daha güvenilir olduğunu gösterir."
+                                )
 
                     with st.expander("DMU (proje) bazında detay (tahmin + belirsizlik aralığı)"):
                         st.dataframe(r["detay_df"], use_container_width=True)

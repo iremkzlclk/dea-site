@@ -895,3 +895,104 @@ def en_uygun_ml_ile_panel_senaryo(sonuc: dict, panel_girdi_yuzdeleri: dict) -> d
         "ortalama_son_MI": round(float(detay_df["Son_Gercek_MI"].mean()), 4),
         "ortalama_degisim_yuzde": round(float(detay_df["Degisim_Yuzde"].mean()), 2),
     }
+
+
+def rolling_backtest_ml_karsilastir(panel_df: pd.DataFrame, bagimsizlar: list, bagimli: str = "MI",
+                                      min_egitim_donemi: int = 2) -> dict:
+    """
+    ML adaylarinin (Ridge/Lasso/ElasticNet/Random Forest) GERCEK ileriye-donuk
+    (rolling/walk-forward) tahmin performansini olcer. GroupKFold'un aksine
+    (o, DMU bazinda boler -- "hangi model sinifi MI'yi genel olarak daha iyi
+    aciklar?" sorusuna uygundur), burada egitim/test ayrimi ZAMAN bazinda
+    yapilir: mumkun olan HER donem gecisi sirayla test icin ayrilir (o ana
+    kadarki TUM gecmisle egitilip bir sonraki donem tahmin edilir) -- bu,
+    "gercekten GELECEGI tahmin etsem ne kadar isabetli olurdum?" sorusuna
+    cevap verir (bkz. backtest_module.py'deki rolling_backtest_calistir,
+    ayni mantik burada panel regresyonu yerine ML adaylarina uygulanmistir).
+
+    Returns: dict -- yeterli_veri (bool), mesaj (yetersizse), kat_sayisi,
+             karsilastirma (DataFrame: Model, MAE_ortalama, RMSE_ortalama,
+             MAE_std -- kucukten buyuge siralanmis), en_iyi_model_adi
+    """
+    zaman_seviyeleri = sorted(panel_df.index.get_level_values("time").unique())
+    toplam_kat_adayi = len(zaman_seviyeleri) - min_egitim_donemi
+    if toplam_kat_adayi < 1:
+        return {
+            "yeterli_veri": False,
+            "mesaj": (
+                f"Rolling doğrulama için en az {min_egitim_donemi + 1} dönem gerekli. "
+                f"Mevcut dönem sayısı: {len(zaman_seviyeleri)}."
+            ),
+        }
+
+    gecerli = [d for d in bagimsizlar if d in panel_df.columns]
+    adaylar = {
+        "Ridge (RidgeCV)": Pipeline([("scale", StandardScaler()), ("model", RidgeCV())]),
+        "Lasso (LassoCV)": Pipeline([("scale", StandardScaler()), ("model", LassoCV(max_iter=10000))]),
+        "ElasticNet (ElasticNetCV)": Pipeline([("scale", StandardScaler()),
+                                                ("model", ElasticNetCV(max_iter=10000))]),
+        "Random Forest": Pipeline([("scale", StandardScaler()),
+                                    ("model", RandomForestRegressor(
+                                        n_estimators=200, max_depth=3, min_samples_leaf=3, random_state=42))]),
+    }
+
+    hatalar = {isim: {"mae": [], "rmse": []} for isim in adaylar}
+    kat_sayisi = 0
+    for i in range(min_egitim_donemi, len(zaman_seviyeleri)):
+        egitim_zamanlari = zaman_seviyeleri[:i]
+        test_zamani = zaman_seviyeleri[i]
+        egitim_df = panel_df[panel_df.index.get_level_values("time").isin(egitim_zamanlari)]
+        test_df = panel_df[panel_df.index.get_level_values("time") == test_zamani]
+        if egitim_df.index.get_level_values("entity").nunique() < 3 or len(test_df) == 0:
+            continue
+
+        X_egitim = egitim_df[gecerli].values
+        y_egitim = egitim_df[bagimli].values
+        X_test = test_df[gecerli].values
+        y_test = test_df[bagimli].values
+
+        kat_gecerli = True
+        kat_sonuclari = {}
+        for isim, pipe in adaylar.items():
+            try:
+                gecici = Pipeline(pipe.steps).fit(X_egitim, y_egitim)
+                tahmin = gecici.predict(X_test)
+                mae = float(np.mean(np.abs(tahmin - y_test)))
+                rmse = float(np.sqrt(np.mean((tahmin - y_test) ** 2)))
+                kat_sonuclari[isim] = (mae, rmse)
+            except Exception:
+                kat_gecerli = False
+                break
+        if not kat_gecerli:
+            continue
+
+        kat_sayisi += 1
+        for isim, (mae, rmse) in kat_sonuclari.items():
+            hatalar[isim]["mae"].append(mae)
+            hatalar[isim]["rmse"].append(rmse)
+
+    if kat_sayisi == 0:
+        return {
+            "yeterli_veri": False,
+            "mesaj": "Hiçbir dönem geçişinde tüm modeller başarıyla eğitilip test edilemedi.",
+        }
+
+    satirlar = []
+    for isim in adaylar:
+        mae_listesi = hatalar[isim]["mae"]
+        rmse_listesi = hatalar[isim]["rmse"]
+        satirlar.append({
+            "Model": isim,
+            "MAE_ortalama": round(float(np.mean(mae_listesi)), 4),
+            "MAE_std": round(float(np.std(mae_listesi)), 4),
+            "RMSE_ortalama": round(float(np.mean(rmse_listesi)), 4),
+        })
+    karsilastirma = pd.DataFrame(satirlar).sort_values("MAE_ortalama").reset_index(drop=True)
+
+    return {
+        "yeterli_veri": True,
+        "kat_sayisi": kat_sayisi,
+        "denenen_kat_sayisi": toplam_kat_adayi,
+        "karsilastirma": karsilastirma,
+        "en_iyi_model_adi": karsilastirma.iloc[0]["Model"],
+    }
