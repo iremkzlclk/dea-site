@@ -94,6 +94,10 @@ def _tek_kat_calistir(panel_df: pd.DataFrame, egitim_zamanlari: list, test_zaman
         gercek = float(test_df.loc[(entity, test_zamani), bagimli])
         tahmin = float(tahminler.loc[(entity, test_zamani)])
         hata = tahmin - gercek
+        # ESIK-bazli yon: MI>1.0 mi degil mi (verimlilik ONCEKI DONEME GORE
+        # artti mi azaldi mi). Bu, DMU'lar ARASI goreli siralamayi OLCMEZ --
+        # tum DMU'lar zaten MI>1 civarindaysa, model siralamayi tamamen
+        # TERSINE cevirse bile bu metrik hala %100 cikabilir.
         yon_gercek = "Artis" if gercek > 1.0 else "Azalis"
         yon_tahmin = "Artis" if tahmin > 1.0 else "Azalis"
         tahmin_satirlar.append({
@@ -115,6 +119,19 @@ def _tek_kat_calistir(panel_df: pd.DataFrame, egitim_zamanlari: list, test_zaman
         pearson_r = float(np.corrcoef(gercek_arr, tahmin_arr)[0, 1])
     else:
         pearson_r = None
+
+    # SIRALAMA (rank) korelasyonu: DMU'lar ARASI goreli performansi (hangisi
+    # digerinden daha verimli) modelin DOGRU siralayip siralamadigini olcer --
+    # esik-bazli "yon_dogruluk"tan TAMAMEN farkli bir soruya cevap verir.
+    # Ornek: tum DMU'larin gercek VE tahmin degerleri MI>1 olsa bile (esikte
+    # "yon_dogruluk"=100 cikar), model DMU'larin siralamasini TAM TERSINE
+    # cevirmis olabilir -- bu durumda siralama_korelasyonu negatif cikar ve
+    # bu yanilgiyi acikca gosterir.
+    if len(gercek_arr) >= 3 and len(set(gercek_arr)) > 1 and len(set(tahmin_arr)) > 1:
+        siralama_korelasyonu = float(pd.Series(gercek_arr).corr(pd.Series(tahmin_arr), method="spearman"))
+    else:
+        siralama_korelasyonu = None
+
     yon_dogruluk = float(tahmin_df["yon_dogru_mu"].mean() * 100)
 
     naif_tahmin = np.ones_like(gercek_arr)
@@ -127,7 +144,8 @@ def _tek_kat_calistir(panel_df: pd.DataFrame, egitim_zamanlari: list, test_zaman
         "metrikler": {
             "MAE": round(mae, 4), "RMSE": round(rmse, 4), "MAPE_%": round(mape, 2),
             "Pearson_r": round(pearson_r, 4) if pearson_r is not None else None,
-            "yon_dogruluk_%": round(yon_dogruluk, 1),
+            "Siralama_Korelasyonu_Spearman": round(siralama_korelasyonu, 4) if siralama_korelasyonu is not None else None,
+            "esik_yon_dogruluk_%": round(yon_dogruluk, 1),
             "naif_baseline_MAE": round(naif_mae, 4),
             "modelin_naiften_iyi_mi": mae < naif_mae,
         },
@@ -232,8 +250,10 @@ def rolling_backtest_calistir(panel_df: pd.DataFrame, bagimsizlar: list, bagimli
     mae_listesi = [k["metrikler"]["MAE"] for k in kat_detaylari]
     rmse_listesi = [k["metrikler"]["RMSE"] for k in kat_detaylari]
     mape_listesi = [k["metrikler"]["MAPE_%"] for k in kat_detaylari]
-    yon_listesi = [k["metrikler"]["yon_dogruluk_%"] for k in kat_detaylari]
+    yon_listesi = [k["metrikler"]["esik_yon_dogruluk_%"] for k in kat_detaylari]
     naif_listesi = [k["metrikler"]["naif_baseline_MAE"] for k in kat_detaylari]
+    siralama_listesi = [k["metrikler"]["Siralama_Korelasyonu_Spearman"] for k in kat_detaylari
+                         if k["metrikler"]["Siralama_Korelasyonu_Spearman"] is not None]
 
     ortalama_mae = float(np.mean(mae_listesi))
     ortalama_naif = float(np.mean(naif_listesi))
@@ -247,10 +267,14 @@ def rolling_backtest_calistir(panel_df: pd.DataFrame, bagimsizlar: list, bagimli
             "MAE_ortalama": round(ortalama_mae, 4), "MAE_std": round(float(np.std(mae_listesi)), 4),
             "RMSE_ortalama": round(float(np.mean(rmse_listesi)), 4),
             "MAPE_ortalama_%": round(float(np.mean(mape_listesi)), 2),
-            "yon_dogruluk_ortalama_%": round(float(np.mean(yon_listesi)), 1),
-            "yon_dogruluk_std": round(float(np.std(yon_listesi)), 1),
+            "esik_yon_dogruluk_ortalama_%": round(float(np.mean(yon_listesi)), 1),
+            "esik_yon_dogruluk_std": round(float(np.std(yon_listesi)), 1),
+            "Siralama_Korelasyonu_Spearman_ortalama": (
+                round(float(np.mean(siralama_listesi)), 4) if siralama_listesi else None
+            ),
             "naif_baseline_MAE_ortalama": round(ortalama_naif, 4),
             "modelin_naiften_iyi_mi": ortalama_mae < ortalama_naif,
             "kat_basina_naiften_iyi_sayisi": sum(1 for k in kat_detaylari if k["metrikler"]["modelin_naiften_iyi_mi"]),
         },
     }
+

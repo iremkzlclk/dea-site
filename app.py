@@ -977,12 +977,13 @@ if "sonuc" in st.session_state:
                     ),
                 )
                 c4.metric(
-                    "Yön doğruluğu", f"%{m['yon_dogruluk_%']}",
+                    "Eşik yön doğruluğu", f"%{m['esik_yon_dogruluk_%']}",
                     help=(
-                        "Modelin, verimliligin ARTACAGINI mi AZALACAGINI mi dogru tahmin ettigi "
-                        "DMU'larin orani. %50 = yazi-tura (rastgele tahminle ayni seviye); %80+ "
-                        "gibi yuksek bir oran, model buyuklugu tam tutturamasa bile YONU guvenilir "
-                        "sekilde yakaladigini gosterir -- bu, pratikte en isinize yarayacak sayidir."
+                        "Modelin, verimliligin ONCEKI DONEME GORE ARTACAGINI mi (MI>1) AZALACAGINI mi "
+                        "(MI<1) dogru tahmin ettigi DMU'larin orani. DIKKAT: bu, DMU'lar ARASI GORELI "
+                        "SIRALAMAYI OLCMEZ -- tum DMU'lar zaten MI>1 civarindaysa, model hangi DMU'nun "
+                        "digerinden daha verimli oldugunu TAMAMEN TERS siralasa bile bu oran hala yuksek "
+                        "cikabilir. Goreli siralama icin asagidaki 'Sıralama Korelasyonu'na bakin."
                     ),
                 )
 
@@ -993,6 +994,28 @@ if "sonuc" in st.session_state:
                         f"aynı yönde ve orantılı değişiyor demektir; 0'a yakınsa aralarında bir "
                         f"ilişki yok demektir.)"
                     )
+
+                if m.get("Siralama_Korelasyonu_Spearman") is not None:
+                    sk = m["Siralama_Korelasyonu_Spearman"]
+                    if sk < 0:
+                        st.error(
+                            f"🚨 **Sıralama Korelasyonu (Spearman): {sk}** -- NEGATİF. Model, DMU'lar "
+                            f"arasındaki göreli performans sıralamasını **TERSİNE ÇEVİRİYOR**: gerçekte "
+                            f"daha verimli olan DMU'lara daha DÜŞÜK, daha az verimli olanlara daha "
+                            f"YÜKSEK tahmin veriyor. Yukarıdaki 'Eşik yön doğruluğu' yüksek çıksa bile "
+                            f"bu ciddi bir güvenilirlik sorunudur -- sonuçları temkinli yorumlayın."
+                        )
+                    elif sk < 0.3:
+                        st.warning(
+                            f"⚠️ **Sıralama Korelasyonu (Spearman): {sk}** -- zayıf. Model, DMU'lar "
+                            f"arasındaki göreli sıralamayı güvenilir şekilde yakalayamıyor."
+                        )
+                    else:
+                        st.caption(
+                            f"**Sıralama Korelasyonu (Spearman): {sk}** -- DMU'lar arası göreli "
+                            f"performans sıralamasının ne kadar doğru yakalandığını gösterir (eşik "
+                            f"doğruluğundan farklı olarak)."
+                        )
 
                 if m["modelin_naiften_iyi_mi"]:
                     st.success(
@@ -1009,11 +1032,11 @@ if "sonuc" in st.session_state:
                         f"temkinli olun."
                     )
 
-                if m["yon_dogruluk_%"] < 60:
+                if m["esik_yon_dogruluk_%"] < 60:
                     st.warning(
-                        f"⚠️ Yon dogruluk orani (%{m['yon_dogruluk_%']}) yazi-tura (%50) seviyesine yakin -- "
-                        f"model, verimliligin artacagini mi azalacagini mi dogru tahmin etmekte de "
-                        f"zorlaniyor olabilir."
+                        f"⚠️ Eşik yön doğruluk oranı (%{m['esik_yon_dogruluk_%']}) yazı-tura (%50) "
+                        f"seviyesine yakın -- model, verimliliğin artacağını mı azalacağını mı doğru "
+                        f"tahmin etmekte de zorlanıyor olabilir."
                     )
 
                 st.write("---")
@@ -1102,14 +1125,28 @@ if "sonuc" in st.session_state:
                     help="Hatayi yuzde olarak ifade eder (katlar arasi ortalama). Yorumlamasi en kolay olcut.",
                 )
                 c4.metric(
-                    "Yön doğruluğu", f"%{om['yon_dogruluk_ortalama_%']}",
+                    "Eşik yön doğruluğu", f"%{om['esik_yon_dogruluk_ortalama_%']}",
                     help=(
-                        f"Modelin verimliligin artacagini mi azalacagini mi dogru tahmin ettigi orani "
-                        f"(katlar arasi ortalama). %50=yazi-tura seviyesi. Katlar arasi degiskenlik (std): "
-                        f"%{om['yon_dogruluk_std']} -- bu sayi buyukse (orn. >15), modelin tutarliligina "
-                        f"tek bir katla degil, ancak bu ortalamayla guvenebilirsiniz."
+                        f"Modelin verimliligin artacagini mi azalacagini mi (MI>1 esigine gore) dogru "
+                        f"tahmin ettigi orani (katlar arasi ortalama). DMU'lar ARASI GORELI SIRALAMAYI "
+                        f"OLCMEZ. Katlar arasi degiskenlik (std): %{om['esik_yon_dogruluk_std']}."
                     ),
                 )
+
+                if om.get("Siralama_Korelasyonu_Spearman_ortalama") is not None:
+                    sk = om["Siralama_Korelasyonu_Spearman_ortalama"]
+                    st.caption(
+                        f"**Sıralama Korelasyonu (Spearman, katlar arası ortalama): {sk}** -- DMU'lar "
+                        f"arası göreli performans sıralamasının doğru yakalanıp yakalanmadığını gösterir "
+                        f"(eşik yön doğruluğundan farklı bir soru). Negatifse, model sıralamayı sistematik "
+                        f"olarak TERSİNE çeviriyor demektir."
+                    )
+                    if sk < 0:
+                        st.error(
+                            f"🚨 Ortalama sıralama korelasyonu NEGATİF -- model, DMU'lar arasındaki "
+                            f"göreli verimlilik sıralamasını genel olarak tersine çeviriyor. Eşik yön "
+                            f"doğruluğu yüksek görünse bile bu ciddi bir güvenilirlik sorunudur."
+                        )
 
                 if om["modelin_naiften_iyi_mi"]:
                     st.success(
@@ -1127,10 +1164,11 @@ if "sonuc" in st.session_state:
                         f"yatirim tavsiyelerini bu sonuca gore TEMKINLI verin."
                     )
 
-                if om["yon_dogruluk_std"] > 15:
+                if om["esik_yon_dogruluk_std"] > 15:
                     st.warning(
-                        f"⚠️ Yon dogrulugu katlar arasinda buyuk farklilik gosteriyor (std=%{om['yon_dogruluk_std']}) "
-                        f"-- modelin tutarliligi donemden doneme degisken, tek bir katla yargilamak yaniltici olurdu."
+                        f"⚠️ Eşik yön doğruluğu katlar arasinda buyuk farklilik gosteriyor "
+                        f"(std=%{om['esik_yon_dogruluk_std']}) -- modelin tutarliligi donemden doneme "
+                        f"degisken, tek bir katla yargilamak yaniltici olurdu."
                     )
 
                 st.write("---")
@@ -1141,11 +1179,13 @@ if "sonuc" in st.session_state:
                         "Egitim donemleri": str(k["egitim_zamanlari"]), "Test donemi": str(k["test_zamani"]),
                         "MAE": k["metrikler"]["MAE"], "Naif MAE": k["metrikler"]["naif_baseline_MAE"],
                         "Naiften iyi mi": k["metrikler"]["modelin_naiften_iyi_mi"],
-                        "Yon Dogruluk (%)": k["metrikler"]["yon_dogruluk_%"],
+                        "Eşik Yön Doğruluk (%)": k["metrikler"]["esik_yon_dogruluk_%"],
+                        "Sıralama Korelasyonu": k["metrikler"]["Siralama_Korelasyonu_Spearman"],
                     })
                 kat_ozet_df = pd.DataFrame(kat_ozet_satirlari)
                 st.dataframe(kat_ozet_df, use_container_width=True, hide_index=True)
-                st.bar_chart(kat_ozet_df.set_index("Test donemi")["Yon Dogruluk (%)"])
+                st.bar_chart(kat_ozet_df.set_index("Test donemi")["Eşik Yön Doğruluk (%)"])
+
 
                 st.download_button(
                     "Rolling backtest kat ozetini Excel indir", excel_indirme_verisi(kat_ozet_df),
