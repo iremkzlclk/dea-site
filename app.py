@@ -972,7 +972,7 @@ if "sonuc" in st.session_state:
                     legend=alt.Legend(title=None, orient="top"),
                 ),
                 tooltip=["Değişken", "katsayi", "p_degeri", "mi_etkisi_yuzde10"],
-            ).properties(height=max(120, 60 * len(anlamli_df_sirali)))
+            ).properties(height=max(120, 75 * len(anlamli_df_sirali)))
 
             sifir_cizgi = alt.Chart(pd.DataFrame({"x": [0]})).mark_rule(color="#888", strokeDash=[4, 4]).encode(x="x:Q")
 
