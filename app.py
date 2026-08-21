@@ -14,7 +14,7 @@ from dea_module import min_dmu_kontrolu
 from panel_module import leave_one_out_kararlilik, aciklayicilik_analizi, degisken_varyans_analizi, run_panel_analysis, korelasyon_ve_vif_hesapla
 from pipeline import run_pipeline
 from backtest_module import backtest_calistir, rolling_backtest_calistir
-from ml_module import gelecek_donem_dea_senaryo, panel_regresyon_senaryo
+from senaryo_module import gelecek_donem_dea_senaryo, panel_regresyon_senaryo
 from yorumlama import (
     malmquist_yorum_metni,
     malmquist_donem_ortalamasi,
@@ -405,7 +405,7 @@ if "sonuc" in st.session_state:
 
     tab_dea, tab_malmquist, tab_panel, tab_yorum, tab_aciklayici, tab_backtest, tab_ml = st.tabs(
         ["DEA Sonuclari", "Malmquist Sonuclari", "Panel Analizi", "📖 Sonuç Yorumlama",
-         "Açıklayıcılık", "Backtest (Model Dogrulama)", "ML Tahmin"]
+         "Açıklayıcılık", "Backtest (Model Dogrulama)", "🔮 Gelecek Dönem Tahmini"]
     )
 
     with tab_dea:
@@ -911,10 +911,7 @@ if "sonuc" in st.session_state:
         st.markdown("### 📖 Panel Sonuçlarının Yorumu — Yön, Anlamlılık, Büyüklük")
         st.caption(
             "Bu sayfa YENİ bir istatistiksel hesaplama YAPMAZ -- Panel Analizi sekmesindeki "
-            "NİHAİ modelin (Pooled/FE/RE, hangisi seçildiyse) sonuçlarını, teknik tabloların "
-            "ötesinde düz Türkçe olarak, değişken bazında yorumlar. Amaç: 'hangi girdi, "
-            "verimliliği hangi yönde ve ne kadar güçlü etkiliyor?' sorusuna hızlı, okunur "
-            "bir cevap vermek."
+            "NİHAİ modelin (Pooled/FE/RE, hangisi seçildiyse) sonuçlarını görsel olarak özetler."
         )
 
         p_yorum = sonuc["panel_sonuc"]
@@ -934,61 +931,93 @@ if "sonuc" in st.session_state:
         analiz_df_yorum = panel_aksiyon_analizi(
             nihai_res_yorum, girdi_cols, cikti_cols, sonuc["panel_df"], alpha=YORUM_ALPHA,
         )
+        analiz_df_yorum = analiz_df_yorum.copy()
+        analiz_df_yorum["Anlamlı mı"] = analiz_df_yorum["anlamli_mi"].map({True: "✅ Anlamlı", False: "❌ Anlamsız"})
+        analiz_df_yorum["Değişken"] = analiz_df_yorum["degisken"].str.replace("Girdi_", "", regex=False).str.replace("Cikti_", "", regex=False)
 
-        anlamli_df = analiz_df_yorum[analiz_df_yorum["anlamli_mi"]].sort_values(
-            "mi_etkisi_yuzde10", key=abs, ascending=False
+        # --- 1) Anlamlilik durumu -- tek tablo, sutunla ayirt edilebilir ---
+        st.markdown("#### 1️⃣ Anlamlılık Durumu")
+        st.dataframe(
+            analiz_df_yorum[["Değişken", "katsayi", "p_degeri", "Anlamlı mı"]]
+                .rename(columns={"katsayi": "Katsayı", "p_degeri": "P-değeri"})
+                .sort_values("P-değeri"),
+            use_container_width=True, hide_index=True,
         )
-        anlamsiz_df = analiz_df_yorum[~analiz_df_yorum["anlamli_mi"]]
+
+        anlamli_df = analiz_df_yorum[analiz_df_yorum["anlamli_mi"]].copy()
+        anlamsiz_df = analiz_df_yorum[~analiz_df_yorum["anlamli_mi"]].copy()
+
+        # --- 2) Anlamli degiskenler icin GORSEL aciklama (tornado / diverging bar) ---
+        st.write("---")
+        st.markdown("#### 2️⃣ Anlamlı Değişkenlerin Verimliliğe (MI) Etkisi")
 
         if anlamli_df.empty:
             st.warning(
                 f"⚠️ p<{YORUM_ALPHA:.2f} eşiğinde istatistiksel olarak anlamlı hiçbir değişken "
-                f"bulunamadı -- bu durumda net, sayısal bir yorum sunmak yanıltıcı olur."
+                f"bulunamadı."
             )
         else:
-            st.markdown("#### Anlamlı Değişkenler — Etki Sırasına Göre (büyükten küçüğe)")
-            for _, row in anlamli_df.iterrows():
-                pozitif = row["mi_etkisi_yuzde10"] > 0
-                renk = "🟢" if pozitif else "🔴"
-                yon_kelime = "ARTIRIYOR" if pozitif else "AZALTIYOR"
-                isim_temiz = str(row["degisken"]).replace("Girdi_", "").replace("Cikti_", "")
-                with st.container(border=True):
-                    st.markdown(f"##### {renk} {isim_temiz}")
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("Katsayı", round(row["katsayi"], 4))
-                    c2.metric("P-değeri", round(row["p_degeri"], 4))
-                    c3.metric("%10'luk değişim etkisi (MI puanı)", round(row["mi_etkisi_yuzde10"], 4))
-                    st.markdown(
-                        f"Bu değişken, ortalama değerinin **%10 kadar değişmesi** durumunda "
-                        f"verimliliği (MI'yi) istatistiksel olarak anlamlı şekilde **{yon_kelime}** "
-                        f"(p={round(row['p_degeri'],4)} < {YORUM_ALPHA:.2f})."
-                    )
-                    if row.get("celiski"):
-                        st.warning(
-                            f"⚠️ Bu ilişkinin yönü ({row['gercek_yon']}), teorik beklentiyle "
-                            f"({row['beklenen_yon']}) çelişiyor -- dikkatli yorumlanmalı."
-                        )
+            anlamli_df["Yön"] = anlamli_df["mi_etkisi_yuzde10"].apply(lambda v: "Artırıyor" if v > 0 else "Azaltıyor")
+            anlamli_df["Etiket"] = anlamli_df["mi_etkisi_yuzde10"].apply(lambda v: f"{v:+.4f}")
+            anlamli_df_sirali = anlamli_df.reindex(
+                anlamli_df["mi_etkisi_yuzde10"].abs().sort_values(ascending=True).index
+            )
 
-            st.write("---")
-            st.markdown("#### Görsel Özet")
-            gorsel_seri = anlamli_df.set_index("degisken")["mi_etkisi_yuzde10"]
-            st.bar_chart(gorsel_seri)
+            tornado = alt.Chart(anlamli_df_sirali).mark_bar(size=28).encode(
+                x=alt.X("mi_etkisi_yuzde10:Q", title="MI üzerindeki etki (%10'luk değişim için)"),
+                y=alt.Y("Değişken:N", sort=None, title=None),
+                color=alt.Color(
+                    "Yön:N",
+                    scale=alt.Scale(domain=["Artırıyor", "Azaltıyor"], range=["#2ca02c", "#d62728"]),
+                    legend=alt.Legend(title=None, orient="top"),
+                ),
+                tooltip=["Değişken", "katsayi", "p_degeri", "mi_etkisi_yuzde10"],
+            ).properties(height=max(120, 45 * len(anlamli_df_sirali)))
+
+            sifir_cizgi = alt.Chart(pd.DataFrame({"x": [0]})).mark_rule(color="#888", strokeDash=[4, 4]).encode(x="x:Q")
+
+            etiketler = alt.Chart(anlamli_df_sirali).mark_text(
+                align=alt.expr(alt.expr.if_(alt.datum.mi_etkisi_yuzde10 > 0, "left", "right")),
+                dx=alt.expr(alt.expr.if_(alt.datum.mi_etkisi_yuzde10 > 0, 5, -5)),
+                fontWeight="bold", fontSize=12,
+            ).encode(
+                x="mi_etkisi_yuzde10:Q", y=alt.Y("Değişken:N", sort=None), text="Etiket:N",
+                color=alt.value("black"),
+            )
+
+            st.altair_chart(tornado + sifir_cizgi + etiketler, use_container_width=True)
+            st.caption(
+                "Her çubuk, ilgili değişkenin ortalama değerinin %10 değişmesi durumunda MI'de "
+                "(verimlilik endeksinde) beklenen değişimi gösterir. Yeşil = verimliliği ARTIRIYOR, "
+                "kırmızı = verimliliği AZALTIYOR. Çubuk ne kadar uzunsa, etki o kadar güçlü."
+            )
+
+            # Kucuk ozet kartlari -- en guclu pozitif ve en guclu negatif etki
+            en_guclu_pozitif = anlamli_df[anlamli_df["mi_etkisi_yuzde10"] > 0].sort_values(
+                "mi_etkisi_yuzde10", ascending=False
+            ).head(1)
+            en_guclu_negatif = anlamli_df[anlamli_df["mi_etkisi_yuzde10"] < 0].sort_values(
+                "mi_etkisi_yuzde10"
+            ).head(1)
+            kc1, kc2 = st.columns(2)
+            if not en_guclu_pozitif.empty:
+                r = en_guclu_pozitif.iloc[0]
+                kc1.metric(f"🟢 En güçlü olumlu etki: {r['Değişken']}", f"{r['mi_etkisi_yuzde10']:+.4f}")
+            if not en_guclu_negatif.empty:
+                r = en_guclu_negatif.iloc[0]
+                kc2.metric(f"🔴 En güçlü olumsuz etki: {r['Değişken']}", f"{r['mi_etkisi_yuzde10']:+.4f}")
 
         if not anlamsiz_df.empty:
             with st.expander(f"İstatistiksel olarak anlamlı BULUNAMAYAN değişkenler ({len(anlamsiz_df)} adet)"):
-                st.caption(
-                    "Bu değişkenlerin katsayısı sıfırdan istatistiksel olarak ayırt edilemiyor -- "
-                    "yönü/büyüklüğü hakkında güvenilir bir yorum yapılamaz."
-                )
+                st.caption("Bu değişkenlerin katsayısı sıfırdan istatistiksel olarak ayırt edilemiyor.")
                 st.dataframe(
-                    anlamsiz_df[["degisken", "katsayi", "p_degeri"]], use_container_width=True, hide_index=True,
+                    anlamsiz_df[["Değişken", "katsayi", "p_degeri"]]
+                        .rename(columns={"katsayi": "Katsayı", "p_degeri": "P-değeri"}),
+                    use_container_width=True, hide_index=True,
                 )
 
-        st.write("---")
-        st.markdown("#### Tam Metin Özeti")
-        st.markdown(panel_aksiyon_metni(analiz_df_yorum))
-
-        with st.expander("Tüm değişkenlerin tam tablosu"):
+        with st.expander("Metin özeti + tam tablo (isteğe bağlı)"):
+            st.markdown(panel_aksiyon_metni(analiz_df_yorum))
             st.dataframe(
                 analiz_df_yorum.style.apply(_katsayi_renklendir, axis=1),
                 use_container_width=True, hide_index=True,
