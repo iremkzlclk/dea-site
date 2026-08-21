@@ -1508,7 +1508,6 @@ if "sonuc" in st.session_state:
                         st.dataframe(r["X_senaryo"], use_container_width=True)
     with tab_aciklayici:
         st.markdown("### 📊 Açıklayıcılık Analizi — Hangi Değişken En İyi Açıklıyor?")
-        st.markdown("### 📊 Açıklayıcılık Analizi — Hangi Değişken En İyi Açıklıyor?")
         st.markdown("""
         Panel Analizi sekmesinde gördüğünüz **R²** (modelin MI'deki değişimin ne kadarını
         açıkladığı), tek bir sayı olarak veriliyordu. Bu sekme, o tek sayıyı **her girdi ve
